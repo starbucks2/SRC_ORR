@@ -12,7 +12,7 @@ $student_id = $_SESSION['student_id'];
 $current = null;
 // Load current student row (used to preserve fields not present in form and to delete old photo)
 try {
-    $stCur = $conn->prepare("SELECT firstname, middlename, lastname, email, department, profile_pic FROM students WHERE student_id = ?");
+    $stCur = $conn->prepare("SELECT firstname, middlename, lastname, email, department, course_strand, profile_pic FROM students WHERE student_id = ?");
     $stCur->execute([$student_id]);
     $current = $stCur->fetch(PDO::FETCH_ASSOC) ?: [];
 } catch (Exception $e) { $current = []; }
@@ -21,6 +21,7 @@ $middlename = isset($_POST['middlename']) ? trim($_POST['middlename']) : '';
 $lastname = isset($_POST['lastname']) ? trim($_POST['lastname']) : '';
 $email = isset($_POST['email']) ? trim($_POST['email']) : '';
 $department = isset($_POST['department']) ? trim($_POST['department']) : ($current['department'] ?? '');
+$course_strand = isset($_POST['course_strand']) ? trim($_POST['course_strand']) : ($current['course_strand'] ?? '');
 $profile_pic_name = $_FILES['profile_pic']['name'] ?? '';
 $upload_dir = __DIR__ . '/images/';
 $updated_profile_pic = '';
@@ -128,14 +129,14 @@ try {
     }
 
 
-    // Always update firstname, middlename, lastname, email, department, and optionally profile_pic
+    // Always update firstname, middlename, lastname, email, department, course_strand, and optionally profile_pic
     if ($updated_profile_pic) {
-        $sql = "UPDATE students SET firstname = ?, middlename = ?, lastname = ?, email = ?, department = ?, profile_pic = ? WHERE student_id = ?";
-        $params = [$firstname, $middlename, $lastname, $email, $department, $updated_profile_pic, $student_id];
+        $sql = "UPDATE students SET firstname = ?, middlename = ?, lastname = ?, email = ?, department = ?, course_strand = ?, profile_pic = ? WHERE student_id = ?";
+        $params = [$firstname, $middlename, $lastname, $email, $department, $course_strand, $updated_profile_pic, $student_id];
         $_SESSION['profile_pic'] = $updated_profile_pic;
     } else {
-        $sql = "UPDATE students SET firstname = ?, middlename = ?, lastname = ?, email = ?, department = ? WHERE student_id = ?";
-        $params = [$firstname, $middlename, $lastname, $email, $department, $student_id];
+        $sql = "UPDATE students SET firstname = ?, middlename = ?, lastname = ?, email = ?, department = ?, course_strand = ? WHERE student_id = ?";
+        $params = [$firstname, $middlename, $lastname, $email, $department, $course_strand, $student_id];
     }
     $stmt = $conn->prepare($sql);
     $stmt->execute($params);
@@ -146,6 +147,7 @@ try {
     $_SESSION['lastname'] = $lastname;
     $_SESSION['email'] = $email;
     $_SESSION['department'] = $department;
+    $_SESSION['course_strand'] = $course_strand;
 
     // Commit transaction if still active
     if ($conn->inTransaction()) { $conn->commit(); }

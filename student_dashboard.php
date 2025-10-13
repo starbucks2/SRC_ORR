@@ -16,6 +16,7 @@ $email = isset($_SESSION['email']) ? $_SESSION['email'] : 'Not Available';
 $profile_pic = isset($_SESSION['profile_pic']) ? 'images/' . $_SESSION['profile_pic'] : 'images/default.jpg';
 $department = $_SESSION['department'] ?? ($_SESSION['strand'] ?? '');
 $strand = $department; // temporary compatibility
+$course_strand = $_SESSION['course_strand'] ?? '';
 $student_role = $_SESSION['student_role'] ?? 'Member';
 
 // Ensure the profile picture file exists
@@ -35,41 +36,7 @@ foreach ($submissions as $s) {
 }
 $pendingCount = max(0, $submissionCount - $approvedCount);
 
-// Determine which column announcements table uses for targeting (department vs legacy strand)
-try {
-    $colCheck = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'announcements' AND COLUMN_NAME = 'department'");
-    $colCheck->execute();
-    $annTargetCol = ((int)$colCheck->fetchColumn() > 0) ? 'department' : 'strand';
-} catch (Exception $e) { $annTargetCol = 'strand'; }
-
-// Fetch announcements targeted to student's department or all
-$query = "SELECT * FROM announcements WHERE (" . $annTargetCol . " = ? OR " . $annTargetCol . " IS NULL OR " . $annTargetCol . " = '') ORDER BY created_at DESC LIMIT 5";
-$stmt = $conn->prepare($query);
-$stmt->execute([$department]);
-$announcements = $stmt->fetchAll(PDO::FETCH_ASSOC);
-// Unread announcements count for badge
-// Ensure read-tracking table exists (first deploy safety)
-try {
-    $conn->exec("CREATE TABLE IF NOT EXISTS student_announcement_reads (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        student_id INT NOT NULL,
-        announcement_id INT NOT NULL,
-        read_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY uniq_student_announcement (student_id, announcement_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-} catch (Exception $e) {
-    // fail silently; we will treat as zero unread if creation fails
-}
-
-$unreadSql = "SELECT COUNT(*) FROM announcements a 
-      WHERE (a." . $annTargetCol . " = ? OR a." . $annTargetCol . " IS NULL OR a." . $annTargetCol . " = '')
-        AND NOT EXISTS (
-            SELECT 1 FROM student_announcement_reads r
-            WHERE r.announcement_id = a.id AND r.student_id = ?
-        )";
-$unreadStmt = $conn->prepare($unreadSql);
-$unreadStmt->execute([$department, (int)$_SESSION['student_id']]);
-$announcementUnreadCount = (int)$unreadStmt->fetchColumn();
+// Announcements removed - students can upload anytime without announcement requirements
 ?>
 
 <!DOCTYPE html>
@@ -177,58 +144,6 @@ $announcementUnreadCount = (int)$unreadStmt->fetchColumn();
                 
                 <!-- Notification + Profile Section -->
                 <div id="topUserControls" class="flex items-center space-x-4 relative" style="z-index: 9999;">
-                    <!-- Notifications Bell -->
-                    <?php $announcementCount = is_array($announcements) ? count($announcements) : 0; ?>
-                    <div id="notifContainer" class="relative">
-                        <button type="button" id="notifBellBtn" class="relative p-2 rounded-full hover:bg-gray-100 transition-colors duration-200 focus:outline-none">
-                            <i class="fas fa-bell text-gray-600 text-xl"></i>
-                            <?php if ($announcementUnreadCount > 0): ?>
-                                <span class="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center px-1.5 py-0.5 text-[10px] font-bold leading-none text-white bg-red-600 rounded-full">
-                                    <?php echo $announcementUnreadCount; ?>
-                                </span>
-                            <?php endif; ?>
-                        </button>
-                        <!-- Notifications Dropdown -->
-                        <div id="notifMenu" class="hidden fixed sm:absolute top-16 sm:top-auto sm:right-0 right-2 left-2 sm:left-auto mt-2 w-[95vw] sm:w-80 md:w-96 max-w-[95vw] bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden z-50">
-                            <div class="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-                                <p class="font-semibold text-gray-800">Announcements</p>
-                                <?php if ($announcementUnreadCount > 0): ?>
-                                    <span class="text-xs text-gray-500"><?php echo $announcementUnreadCount; ?> new</span>
-                                <?php endif; ?>
-                            </div>
-                            <?php if ($announcementCount > 0): ?>
-                                <ul class="max-h-[70vh] sm:max-h-80 overflow-auto divide-y divide-gray-100">
-                                    <?php foreach ($announcements as $a): 
-                                        $isPast = (new DateTime($a['deadline'])) < (new DateTime());
-                                    ?>
-                                        <li class="p-2 sm:p-3 hover:bg-gray-50">
-                                            <div class="flex items-start justify-between">
-                                                <div class="pr-3 whitespace-normal break-words min-w-0">
-                                                    <p class="text-sm sm:text-base font-medium text-gray-900 truncate"><?php echo htmlspecialchars($a['title']); ?></p>
-                                                    <p class="hidden sm:block mt-1 text-xs text-gray-600"><?php echo htmlspecialchars(mb_strimwidth(strip_tags($a['content']), 0, 100, '…')); ?></p>
-                                                    <div class="mt-1 text-[10px] sm:text-[11px] text-gray-500">
-                                                        Deadline: <?php echo date('M j, Y g:i A', strtotime($a['deadline'])); ?>
-                                                    </div>
-                                                </div>
-                                                <span class="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] sm:text-xs font-medium <?php echo $isPast ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'; ?>">
-                                                    <?php echo $isPast ? 'Closed' : 'Active'; ?>
-                                                </span>
-                                            </div>
-                                        </li>
-                                    <?php endforeach; ?>
-                                </ul>
-                                <a href="student_announcements.php" class="block text-center text-xs sm:text-sm text-blue-primary hover:text-blue-secondary py-2">
-                                    View all announcements
-                                </a>
-                            <?php else: ?>
-                                <div class="p-6 text-center text-gray-500">
-                                    <i class="fas fa-bell-slash text-2xl mb-2 text-gray-300"></i>
-                                    <p class="text-sm">No announcements at the moment.</p>
-                                </div>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-
                     <!-- Gmail-style Profile -->
                     <div id="profileDropdownContainer" class="relative pointer-events-auto">
                         <button type="button" id="profileDropdown" class="flex items-center space-x-3 bg-gray-50 hover:bg-gray-100 rounded-full p-2 transition-colors duration-200">
@@ -445,32 +360,7 @@ $announcementUnreadCount = (int)$unreadStmt->fetchColumn();
             </div>
 
             <?php
-            // Set timezone to Philippines
-            date_default_timezone_set('Asia/Manila');
-            // Ensure open_at column exists for gating upload windows
-            try {
-                $checkOpen = $conn->prepare("SHOW COLUMNS FROM announcements LIKE 'open_at'");
-                $checkOpen->execute();
-                if ($checkOpen->rowCount() == 0) {
-                    $conn->exec("ALTER TABLE announcements ADD COLUMN open_at DATETIME NULL AFTER content");
-                }
-            } catch (Exception $e) { /* ignore */ }
-
-            // Active: open_at <= now and deadline > now
-            $query = "SELECT * FROM announcements WHERE (" . $annTargetCol . " = ? OR " . $annTargetCol . " IS NULL OR " . $annTargetCol . " = '') AND COALESCE(open_at, created_at, NOW()) <= NOW() AND deadline > NOW() ORDER BY deadline ASC LIMIT 1";
-            $stmt = $conn->prepare($query);
-            $stmt->execute([$department]);
-            $activeAnnouncement = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            // Upcoming: next item where open_at > now
-            $upcomingAnnouncement = null;
-            if (!$activeAnnouncement) {
-                $q2 = "SELECT * FROM announcements WHERE (" . $annTargetCol . " = ? OR " . $annTargetCol . " IS NULL OR " . $annTargetCol . " = '') AND COALESCE(open_at, created_at, NOW()) > NOW() ORDER BY COALESCE(open_at, created_at) ASC LIMIT 1";
-                $st2 = $conn->prepare($q2);
-                $st2->execute([$department]);
-                $upcomingAnnouncement = $st2->fetch(PDO::FETCH_ASSOC);
-            }
-
+            // Students can now upload anytime - no announcement requirement
             // Check if student has already submitted a document
             $stmt = $conn->prepare("SELECT COUNT(*) as submission_count FROM research_submission WHERE student_id = ?");
             $stmt->execute([$_SESSION['student_id']]);
@@ -479,80 +369,19 @@ $announcementUnreadCount = (int)$unreadStmt->fetchColumn();
             ?>
 
             <?php 
-            if ($activeAnnouncement) {
-                $deadline = new DateTime($activeAnnouncement['deadline']);
-                $openAtDt = !empty($activeAnnouncement['open_at']) ? new DateTime($activeAnnouncement['open_at']) : null;
-                $now = new DateTime();
-                $interval = $now->diff($deadline);
-                $totalHours = ($interval->days * 24) + $interval->h;
-                $totalMinutes = $totalHours * 60 + $interval->i;
-                $timeRemaining = '';
-                if ($interval->days > 0) {
-                    $timeRemaining .= $interval->days . ' day' . ($interval->days > 1 ? 's' : '') . ', ';
-                }
-                if ($interval->h > 0 || $interval->days > 0) {
-                    $timeRemaining .= $interval->h . ' hour' . ($interval->h > 1 ? 's' : '') . ', ';
-                }
-                $timeRemaining .= $interval->i . ' minute' . ($interval->i > 1 ? 's' : '');
-                $deadlineTimestamp = strtotime($activeAnnouncement['deadline']) * 1000;
+            if ($hasSubmitted) { 
                 ?>
-                
-                <div class="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-100">
-                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3">
-                        <h4 class="font-bold text-blue-primary flex items-center">
-                            <i class="fas fa-calendar-check mr-2"></i>
-                            Active Submission Period
-                        </h4>
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 mt-2 sm:mt-0">
-                            <i class="fas fa-check-circle mr-1.5"></i>
-                            Open
-                        </span>
+                <div class="text-center py-10">
+                    <div class="mx-auto w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mb-4">
+                        <i class="fas fa-exclamation-triangle text-3xl text-yellow-500"></i>
                     </div>
-                    
-                    <p class="text-gray-700 font-medium"><?php echo htmlspecialchars($activeAnnouncement['title']); ?></p>
-                    
-                    <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div class="flex items-center text-sm text-gray-600">
-                            <i class="fas fa-calendar-alt mr-2 text-blue-500"></i>
-                            <span>Deadline: <?php echo date('M j, Y', strtotime($activeAnnouncement['deadline'])); ?></span>
-                        </div>
-                        <div class="flex items-center text-sm text-gray-600">
-                            <i class="fas fa-clock mr-2 text-blue-500"></i>
-                            <span><?php echo date('g:i A', strtotime($activeAnnouncement['deadline'])); ?></span>
-                        </div>
-                        <?php if ($openAtDt): ?>
-                        <div class="flex items-center text-sm text-gray-600 sm:col-span-2">
-                            <i class="fas fa-door-open mr-2 text-blue-500"></i>
-                            <span>Opened: <?php echo date('M j, Y g:i A', strtotime($activeAnnouncement['open_at'])); ?></span>
-                        </div>
-                        <?php endif; ?>
-                    </div>
-                    
-                    <div class="mt-4">
-                        <p class="text-sm font-medium text-blue-700 mb-1 flex items-center">
-                            <i class="fas fa-hourglass-half mr-2"></i>
-                            Time Remaining
-                        </p>
-                        <div id="countdown" class="text-lg font-bold text-blue-800 countdown-glow">
-                            <?php echo $timeRemaining; ?>
-                        </div>
-                    </div>
+                    <div class="text-yellow-600 text-lg font-semibold mb-2">Document Already Submitted</div>
+                    <p class="text-gray-600 max-w-md mx-auto">
+                        You have already submitted a research document. Multiple submissions are not allowed. If you need to make changes, please edit or delete your existing submission.
+                    </p>
                 </div>
-
                 <?php 
-                if ($hasSubmitted) { 
-                    ?>
-                    <div class="text-center py-10">
-                        <div class="mx-auto w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mb-4">
-                            <i class="fas fa-exclamation-triangle text-3xl text-yellow-500"></i>
-                        </div>
-                        <div class="text-yellow-600 text-lg font-semibold mb-2">Document Already Submitted</div>
-                        <p class="text-gray-600 max-w-md mx-auto">
-                            You have already submitted a research document. Multiple submissions are not allowed. If you need to make changes, please edit or delete your existing submission.
-                        </p>
-                    </div>
-                    <?php 
-                } else { 
+            } else { 
                     ?>
                     <form id="uploadForm" action="upload_research.php" method="POST" enctype="multipart/form-data" class="space-y-5">
                         <input type="hidden" name="student_id" value="<?php echo $_SESSION['student_id']; ?>">
@@ -622,21 +451,20 @@ $announcementUnreadCount = (int)$unreadStmt->fetchColumn();
                             </div>
                         </div>
 
-                        <!-- Row 5: Strand (readonly styled select) + Status (readonly Pending) -->
+                        <!-- Row 5: Department + Course/Strand -->
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
-                                <label class="block text-sm font-semibold text-gray-700 mb-1">Strand</label>
+                                <label class="block text-sm font-semibold text-gray-700 mb-1">Department</label>
                                 <div class="relative">
-                                    <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-user-graduate"></i></span>
-                                    <select class="w-full pl-10 pr-8 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700 cursor-not-allowed" disabled>
-                                        <option selected><?php echo htmlspecialchars($strand ?: '—'); ?></option>
-                                    </select>
+                                    <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-building"></i></span>
+                                    <input type="text" class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700 cursor-not-allowed" value="<?php echo htmlspecialchars($department ?: '—'); ?>" readonly>
                                 </div>
                             </div>
                             <div>
-                                <label class="block text-sm font-semibold text-gray-700 mb-1">Status</label>
-                                <div class="w-full pl-3 pr-3 py-2 border border-green-300 rounded-lg bg-green-50 text-green-700 flex items-center">
-                                    <span class="inline-flex items-center gap-2"><i class="fas fa-check-circle"></i> Pending</span>
+                                <label class="block text-sm font-semibold text-gray-700 mb-1"><?php echo ($department === 'Senior High School') ? 'Strand' : 'Course'; ?></label>
+                                <div class="relative">
+                                    <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-user-graduate"></i></span>
+                                    <input type="text" class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700 cursor-not-allowed" value="<?php echo htmlspecialchars($_SESSION['course_strand'] ?? '—'); ?>" readonly>
                                 </div>
                             </div>
                         </div>
@@ -660,79 +488,8 @@ $announcementUnreadCount = (int)$unreadStmt->fetchColumn();
                             Upload Research
                         </button>
                     </form>
-
-                <script>
-                // Countdown Timer
-                function updateCountdown() {
-                    const deadline = <?php echo $deadlineTimestamp; ?>;
-                    const now = new Date().getTime();
-                    const distance = deadline - now;
-                    
-                    if (distance < 0) {
-                        document.getElementById('countdown').innerHTML = "Submission period has ended";
-                        const form = document.getElementById('uploadForm');
-                        if (form) form.style.display = 'none';
-                        return;
-                    }
-                    
-                    const days = Math.floor(distance / (1000 * 60 * 60 * 24));
-                    const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-                    const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-                    const seconds = Math.floor((distance % (1000 * 60)) / 1000);
-                    
-                    let timeString = '';
-                    if (days > 0) timeString += days + 'd, ';
-                    if (hours > 0 || days > 0) timeString += hours + 'h, ';
-                    timeString += minutes + 'm, ';
-                    timeString += seconds + 's';
-                    
-                    document.getElementById('countdown').innerHTML = timeString;
-                }
-                
-                // Update countdown every second
-                setInterval(updateCountdown, 1000);
-                updateCountdown(); // Initial call
-                </script>
-                
                 <?php 
-                }
-            } elseif ($upcomingAnnouncement) { 
-                ?>
-                <div class="mb-6 p-4 bg-yellow-50 rounded-lg border border-yellow-100">
-                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3">
-                        <h4 class="font-bold text-yellow-800 flex items-center">
-                            <i class="fas fa-hourglass-start mr-2"></i>
-                            Upcoming Submission Period
-                        </h4>
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 mt-2 sm:mt-0">
-                            <i class="fas fa-clock mr-1.5"></i>
-                            Not Yet Open
-                        </span>
-                    </div>
-                    <p class="text-gray-700 font-medium"><?php echo htmlspecialchars($upcomingAnnouncement['title']); ?></p>
-                    <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div class="flex items-center text-sm text-gray-600">
-                            <i class="fas fa-door-open mr-2 text-yellow-600"></i>
-                            <span>Opens: <?php echo date('M j, Y g:i A', strtotime($upcomingAnnouncement['open_at'])); ?></span>
-                        </div>
-                        <div class="flex items-center text-sm text-gray-600">
-                            <i class="fas fa-calendar-alt mr-2 text-yellow-600"></i>
-                            <span>Deadline: <?php echo date('M j, Y g:i A', strtotime($upcomingAnnouncement['deadline'])); ?></span>
-                        </div>
-                    </div>
-                </div>
-                <?php 
-            } else { ?>
-                <div class="text-center py-10">
-                    <div class="mx-auto w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-4">
-                        <i class="fas fa-times-circle text-3xl text-red-500"></i>
-                    </div>
-                    <div class="text-red-600 text-lg font-semibold mb-2">No Active Submission Period</div>
-                    <p class="text-gray-600 max-w-md mx-auto">
-                        There is currently no active submission period. Please wait for an announcement from the Teacher regarding the next submission deadline.
-                    </p>
-                </div>
-            <?php } 
+            } 
             ?>
         </section>
 
@@ -750,6 +507,7 @@ $announcementUnreadCount = (int)$unreadStmt->fetchColumn();
                             <th class="text-left px-4 py-3 text-sm font-semibold text-gray-700">Title</th>
                             <th class="text-left px-4 py-3 text-sm font-semibold text-gray-700">Academic Year</th>
                             <th class="text-left px-4 py-3 text-sm font-semibold text-gray-700">Department</th>
+                            <th class="text-left px-4 py-3 text-sm font-semibold text-gray-700"><?php echo ($department === 'Senior High School') ? 'Strand' : 'Course'; ?></th>
                             <th class="text-left px-4 py-3 text-sm font-semibold text-gray-700">Status</th>
                             <th class="text-left px-4 py-3 text-sm font-semibold text-gray-700">Actions</th>
                         </tr>
@@ -762,7 +520,12 @@ $announcementUnreadCount = (int)$unreadStmt->fetchColumn();
                                     <td class="px-4 py-3 text-sm text-gray-600"><?php echo htmlspecialchars($submission['year']); ?></td>
                                     <td class="px-4 py-3 text-sm">
                                         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                            <?php echo htmlspecialchars($submission['strand'] ?? $strand); ?>
+                                            <?php echo htmlspecialchars($submission['department'] ?? $department); ?>
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-3 text-sm">
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                            <?php echo htmlspecialchars($submission['course_strand'] ?? $course_strand); ?>
                                         </span>
                                     </td>
                                     <td class="px-4 py-3 text-sm">
@@ -800,7 +563,7 @@ $announcementUnreadCount = (int)$unreadStmt->fetchColumn();
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="5" class="text-center py-8 text-gray-500">
+                                <td colspan="6" class="text-center py-8 text-gray-500">
                                     <div class="flex flex-col items-center">
                                         <i class="fas fa-folder-open text-4xl mb-3 text-gray-300"></i>
                                         <p>No research submitted yet.</p>
@@ -945,55 +708,6 @@ $announcementUnreadCount = (int)$unreadStmt->fetchColumn();
             });
         }
 
-        // Notification dropdown functionality
-        const notifBellBtn = document.getElementById('notifBellBtn');
-        const notifMenu = document.getElementById('notifMenu');
-
-        if (notifBellBtn && notifMenu) {
-            notifBellBtn.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                notifMenu.classList.toggle('hidden');
-                // Close profile dropdown if open
-                const profileMenuEl = document.getElementById('profileDropdownMenu');
-                if (profileMenuEl && !profileMenuEl.classList.contains('hidden')) {
-                    profileMenuEl.classList.add('hidden');
-                    profileMenuEl.style.display = 'none';
-                }
-                // Mark announcements as read once and update badge immediately
-                if (!window._markedAnnouncements) {
-                    window._markedAnnouncements = true;
-                    // Optimistically remove badge and header count
-                    const badge = notifBellBtn.querySelector('span');
-                    if (badge) badge.remove();
-                    const headerCount = notifMenu.querySelector('.px-4.py-3 .text-xs.text-gray-500');
-                    if (headerCount) headerCount.classList.add('hidden');
-
-                    fetch('mark_announcements_read.php', { method: 'POST' })
-                        .then(() => {})
-                        .catch(() => { /* ignore errors; UI already updated optimistically */ });
-                }
-            });
-
-            // Keep open when clicking inside
-            notifMenu.addEventListener('click', function(e) {
-                e.stopPropagation();
-            });
-
-            // Close when clicking outside
-            document.addEventListener('click', function(e) {
-                if (!notifMenu.contains(e.target) && !notifBellBtn.contains(e.target)) {
-                    notifMenu.classList.add('hidden');
-                }
-            });
-
-            // Close on Escape key
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape') {
-                    notifMenu.classList.add('hidden');
-                }
-            });
-        }
 
         // Direct bind SweetAlert2 to dropdown Sign Out (fallback to ensure it always shows)
         const studentDropdownLogout = document.querySelector('#profileDropdownMenu a[href="logout.php"]');
@@ -1031,6 +745,23 @@ $announcementUnreadCount = (int)$unreadStmt->fetchColumn();
         const modal = document.getElementById('editProfileModal');
         if (modal && !modal.contains(e.target) && e.target.classList.contains('bg-opacity-75')) {
             toggleModal();
+        }
+    });
+
+    // Auto-scroll to upload section on page load (for new students or after login)
+    window.addEventListener('DOMContentLoaded', function() {
+        const uploadSection = document.getElementById('upload-research');
+        if (uploadSection) {
+            // Small delay to ensure page is fully rendered
+            setTimeout(function() {
+                uploadSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                // Add a subtle highlight effect
+                uploadSection.style.transition = 'box-shadow 0.3s ease';
+                uploadSection.style.boxShadow = '0 0 20px rgba(59, 130, 246, 0.5)';
+                setTimeout(function() {
+                    uploadSection.style.boxShadow = '';
+                }, 2000);
+            }, 500);
         }
     });
     </script>

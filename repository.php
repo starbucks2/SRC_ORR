@@ -2,16 +2,21 @@
 session_start();
 include 'db.php';
 
-// Determine department based on session (students and sub-admins restricted) or URL
+// Determine department and course/strand based on session (students and sub-admins restricted) or URL
 $user_department = null;
+$user_course_strand = null;
 if (isset($_SESSION['user_type']) && !empty($_SESSION['department']) &&
     (($_SESSION['user_type'] === 'student') || ($_SESSION['user_type'] === 'sub_admins'))) {
     $user_department = $_SESSION['department'];
+    $user_course_strand = $_SESSION['course_strand'] ?? null;
     $department_filter = $user_department; // force to user's department
 } else {
     // Others can use URL filter (accept legacy strand for compatibility)
     $department_filter = $_GET['department'] ?? ($_GET['strand'] ?? 'all');
 }
+
+// Course/Strand filter from URL
+$course_strand_filter = $_GET['course_strand'] ?? 'all';
 
 $research_papers = [];
 // If a student is logged in, allow them to see their own submissions regardless of status
@@ -98,7 +103,16 @@ if ($__academic_year === '') {
 $__ay_like = '%' . $__academic_year . '%';
 
 try {
-    // First get total count for pagination with proper department handling
+    // Ensure research_submission has course_strand column
+    try {
+        $colCheck = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'research_submission' AND COLUMN_NAME = 'course_strand'");
+        $colCheck->execute();
+        if ((int)$colCheck->fetchColumn() === 0) {
+            $conn->exec("ALTER TABLE research_submission ADD COLUMN course_strand VARCHAR(50) NULL AFTER department");
+        }
+    } catch (Exception $e) { /* ignore */ }
+
+    // First get total count for pagination with proper department and course/strand handling
     $count_query = "SELECT COUNT(DISTINCT rs.document) as total 
                     FROM research_submission rs 
                     LEFT JOIN students s ON rs.student_id = s.student_id 
@@ -107,15 +121,27 @@ try {
     $count_params = [];
     if ($current_student_id) { $count_params[] = $current_student_id; }
     $count_params[] = $__ay_like;
-    // Enforce student's department if logged in as student; otherwise honor URL filter
+    // Enforce student's department and course/strand if logged in as student
     if ($user_department !== null) {
         $count_query .= " AND (rs.department = ? OR s.department = ?)";
         $count_params[] = $user_department;
         $count_params[] = $user_department;
+        // Filter by course/strand if student has one
+        if ($user_course_strand !== null && $user_course_strand !== '') {
+            $count_query .= " AND (rs.course_strand = ? OR s.course_strand = ? OR rs.course_strand IS NULL)";
+            $count_params[] = $user_course_strand;
+            $count_params[] = $user_course_strand;
+        }
     } elseif ($department_filter !== 'all') {
         $count_query .= " AND (rs.department = ? OR s.department = ?)";
         $count_params[] = $department_filter;
         $count_params[] = $department_filter;
+        // Apply course/strand filter for admins/sub-admins
+        if ($course_strand_filter !== 'all') {
+            $count_query .= " AND (rs.course_strand = ? OR s.course_strand = ?)";
+            $count_params[] = $course_strand_filter;
+            $count_params[] = $course_strand_filter;
+        }
     }
     $count_stmt = $conn->prepare($count_query);
     $count_stmt->execute($count_params);
@@ -129,7 +155,7 @@ try {
     $current_page = min($current_page, max(1, $total_pages)); // Ensure page doesn't exceed total
     $offset = ($current_page - 1) * $items_per_page;
 
-    // Main query with direct department handling from research_submission
+    // Main query with direct department and course/strand handling from research_submission
     $query = "SELECT 
                 rs.id,
                 rs.title,
@@ -138,6 +164,7 @@ try {
                 rs.keywords,
                 rs.members,
                 rs.department,
+                rs.course_strand,
                 rs.image,
                 rs.document,
                 rs.views,
@@ -157,16 +184,28 @@ try {
     $params = [];
     if ($current_student_id) { $params[] = $current_student_id; }
     $params[] = $__ay_like;
-    // Enforce student's department if logged in as student; otherwise honor URL filter
+    // Enforce student's department and course/strand if logged in as student
     if ($user_department !== null) {
         $query .= " AND (rs.department = ? OR s.department = ?)";
         $params[] = $user_department;
         $params[] = $user_department;
+        // Filter by course/strand if student has one
+        if ($user_course_strand !== null && $user_course_strand !== '') {
+            $query .= " AND (rs.course_strand = ? OR s.course_strand = ? OR rs.course_strand IS NULL)";
+            $params[] = $user_course_strand;
+            $params[] = $user_course_strand;
+        }
     } elseif ($department_filter !== 'all') {
         // Filter by chosen department
         $query .= " AND (rs.department = ? OR s.department = ?)";
         $params[] = $department_filter;
         $params[] = $department_filter;
+        // Apply course/strand filter for admins/sub-admins
+        if ($course_strand_filter !== 'all') {
+            $query .= " AND (rs.course_strand = ? OR s.course_strand = ?)";
+            $params[] = $course_strand_filter;
+            $params[] = $course_strand_filter;
+        }
     }
     $query .= " ORDER BY rs.submission_date DESC";
 
@@ -190,7 +229,7 @@ try {
         // Unique ids
         $studentIds = array_values(array_unique($studentIds));
         $placeholders = implode(',', array_fill(0, count($studentIds), '?'));
-        $sstmt = $conn->prepare("SELECT student_id, firstname, department FROM students WHERE student_id IN ($placeholders)");
+        $sstmt = $conn->prepare("SELECT student_id, firstname, department, course_strand FROM students WHERE student_id IN ($placeholders)");
         $sstmt->execute($studentIds);
         $students = $sstmt->fetchAll(PDO::FETCH_ASSOC);
         foreach ($students as $s) {
@@ -663,6 +702,16 @@ try {
                         <li style="font-weight:bold; cursor: default; color:#202124;">
                             <?= htmlspecialchars($user_department) ?>
                         </li>
+                        <?php if ($user_course_strand): ?>
+                        <li style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e8e8e8;">
+                            <div style="font-size: 11px; color: #5f6368; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">
+                                <?= ($user_department === 'Senior High School') ? 'Your Strand' : 'Your Course' ?>
+                            </div>
+                            <div style="font-weight:bold; color:#1a73e8;">
+                                <?= htmlspecialchars($user_course_strand) ?>
+                            </div>
+                        </li>
+                        <?php endif; ?>
                     <?php else: ?>
                         <li onclick="filterBy('CCS')" style="font-weight:<?= $department_filter === 'CCS' ? 'bold' : 'normal' ?>">CCS (College of Computer Studies)</li>
                         <li onclick="filterBy('COE')" style="font-weight:<?= $department_filter === 'COE' ? 'bold' : 'normal' ?>">COE (College of Education)</li>
@@ -670,11 +719,34 @@ try {
                         <li onclick="filterBy('Senior High School')" style="font-weight:<?= $department_filter === 'Senior High School' ? 'bold' : 'normal' ?>">Senior High School</li>
                     <?php endif; ?>
                 </ul>
+                <?php if (!$user_department): // Only show course/strand filter for admins/sub-admins ?>
+                <hr class="my-4">
+                <h3 class="filter-title"><?= ($department_filter === 'Senior High School') ? 'FILTER BY STRAND' : 'FILTER BY COURSE' ?></h3>
+                <ul class="filter-options">
+                    <li onclick="filterByCourseStrand('all')" style="font-weight:<?= $course_strand_filter === 'all' ? 'bold' : 'normal' ?>">All</li>
+                    <?php if ($department_filter === 'CCS'): ?>
+                        <li onclick="filterByCourseStrand('BSIS')" style="font-weight:<?= $course_strand_filter === 'BSIS' ? 'bold' : 'normal' ?>">BSIS</li>
+                    <?php elseif ($department_filter === 'CBS'): ?>
+                        <li onclick="filterByCourseStrand('BSAIS')" style="font-weight:<?= $course_strand_filter === 'BSAIS' ? 'bold' : 'normal' ?>">BSAIS</li>
+                        <li onclick="filterByCourseStrand('BSENTREP')" style="font-weight:<?= $course_strand_filter === 'BSENTREP' ? 'bold' : 'normal' ?>">BSENTREP</li>
+                    <?php elseif ($department_filter === 'COE'): ?>
+                        <li onclick="filterByCourseStrand('BEED')" style="font-weight:<?= $course_strand_filter === 'BEED' ? 'bold' : 'normal' ?>">BEED</li>
+                        <li onclick="filterByCourseStrand('BSED')" style="font-weight:<?= $course_strand_filter === 'BSED' ? 'bold' : 'normal' ?>">BSED</li>
+                    <?php elseif ($department_filter === 'Senior High School'): ?>
+                        <li onclick="filterByCourseStrand('ABM')" style="font-weight:<?= $course_strand_filter === 'ABM' ? 'bold' : 'normal' ?>">ABM</li>
+                        <li onclick="filterByCourseStrand('TVL')" style="font-weight:<?= $course_strand_filter === 'TVL' ? 'bold' : 'normal' ?>">TVL</li>
+                        <li onclick="filterByCourseStrand('STEM')" style="font-weight:<?= $course_strand_filter === 'STEM' ? 'bold' : 'normal' ?>">STEM</li>
+                        <li onclick="filterByCourseStrand('GAS')" style="font-weight:<?= $course_strand_filter === 'GAS' ? 'bold' : 'normal' ?>">GAS</li>
+                        <li onclick="filterByCourseStrand('HUMSS')" style="font-weight:<?= $course_strand_filter === 'HUMSS' ? 'bold' : 'normal' ?>">HUMSS</li>
+                    <?php endif; ?>
+                </ul>
+                <?php endif; ?>
                 <hr class="my-4">
                 <h3 class="filter-title">ACADEMIC YEAR</h3>
                 <form method="get" id="schoolYearForm">
                     <!-- Department filter -->
                     <input type="hidden" name="department" value="<?= htmlspecialchars($department_filter) ?>">
+                    <input type="hidden" name="course_strand" value="<?= htmlspecialchars($course_strand_filter) ?>">
                     <div class="flex gap-2 items-center mb-2">
                         <?php $__sy = $__academic_year; ?>
                         <select name="academic_year" class="border rounded px-2 py-1 w-full">
@@ -694,6 +766,7 @@ try {
                 <div class="flex justify-between items-center mb-2 gap-3 flex-wrap">
                     <form id="searchForm" method="get" action="repository.php" class="relative flex items-center w-full max-w-xl">
                         <input type="hidden" name="department" value="<?= htmlspecialchars($department_filter) ?>">
+                        <input type="hidden" name="course_strand" value="<?= htmlspecialchars($course_strand_filter) ?>">
                         <input type="hidden" name="academic_year" value="<?= isset($_GET['academic_year']) ? htmlspecialchars($_GET['academic_year']) : (isset($_GET['school_year']) ? htmlspecialchars($_GET['school_year']) : '') ?>">
                         <i class="fas fa-search search-icon"></i>
                         <input type="text" class="search-box" name="search" placeholder="Search research papers..." id="searchInput" value="<?= isset($_GET['search']) ? htmlspecialchars($_GET['search']) : '' ?>" autocomplete="off">
@@ -710,6 +783,7 @@ try {
                         <div class="paper-card" data-title="<?= htmlspecialchars(strtolower($paper['title'] ?? '')) ?>"
                              data-members="<?= htmlspecialchars(strtolower($paper['members'] ?? '')) ?>"
                              data-department="<?= htmlspecialchars(strtolower($paper['department'] ?? '')) ?>"
+                             data-course-strand="<?= htmlspecialchars(strtolower($paper['course_strand'] ?? '')) ?>"
                              data-keywords="<?= htmlspecialchars(strtolower($paper['keywords'] ?? '')) ?>">
                             <div class="paper-row">
                                 <div class="flex-1">
@@ -751,7 +825,13 @@ try {
                                                 echo "Department not specified";
                                             }
                                         ?>
-                                        
+                                        <?php if (!empty($paper['course_strand'])): ?>
+                                            <span class="mx-1">•</span>
+                                            <?php 
+                                                $csLabel = ($deptLabel === 'Senior High School') ? 'Strand' : 'Course';
+                                                echo htmlspecialchars($csLabel) . ': ' . htmlspecialchars($paper['course_strand']);
+                                            ?>
+                                        <?php endif; ?>
                                     </div>
                                     <p class="paper-abstract"><?= htmlspecialchars($paper['abstract']) ?></p>
                                     <?php if (!empty($paper['keywords'])): ?>
@@ -920,7 +1000,15 @@ try {
         function filterBy(department) {
             const u = new URL(window.location.href);
             u.searchParams.set('department', department);
+            u.searchParams.delete('course_strand'); // Reset course/strand when changing department
             // Keep existing search/year params automatically
+            window.location.href = u.toString();
+        }
+
+        function filterByCourseStrand(courseStrand) {
+            const u = new URL(window.location.href);
+            u.searchParams.set('course_strand', courseStrand);
+            // Keep existing department/search/year params automatically
             window.location.href = u.toString();
         }
 

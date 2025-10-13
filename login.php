@@ -115,6 +115,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['profile_pic'] = $user['profile_pic'] ?? 'default.jpg';
                 // Department-based
                 $_SESSION['department'] = $user['department'] ?? ($user['course'] ?? ($user['strand'] ?? ''));
+                // Course/Strand
+                $_SESSION['course_strand'] = $user['course_strand'] ?? '';
+                // Student Number
+                $_SESSION['student_number'] = $user['student_number'] ?? ($user['student_id'] ?? '');
                 // Temporary compatibility during transition
                 $_SESSION['strand'] = $_SESSION['department'];
                 // New: student_role and section for permissions and grouping

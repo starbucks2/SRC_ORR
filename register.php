@@ -46,7 +46,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     // Department selection
     $department = isset($_POST['department']) ? trim($_POST['department']) : '';
-    // Removed: grade, role, section, group_number, strand
+    // Course/Strand selection (depends on department)
+    $course_strand = isset($_POST['course_strand']) ? trim($_POST['course_strand']) : '';
+    // Removed: grade, role, section, group_number
 
     // Prepare profile picture variables (file or captured image)
     $profilePic = $_FILES['profile_pic'] ?? null;
@@ -56,7 +58,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!is_dir($targetDir)) { @mkdir($targetDir, 0777, true); }
 
     // Helper: store old values except password and file
-    function store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department='') {
+    function store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department='', $course_strand='') {
         $_SESSION['old'] = [
             'firstname' => $firstname,
             'middlename' => $middlename,
@@ -64,13 +66,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'suffix' => $suffix,
             'email' => $email,
             'student_number' => $student_number,
-            'department' => $department
+            'department' => $department,
+            'course_strand' => $course_strand
         ];
     }
 
-    if (empty($firstname) || empty($lastname) || empty($email) || empty($password) || empty($student_number) || empty($department)) {
+    if (empty($firstname) || empty($lastname) || empty($email) || empty($password) || empty($student_number) || empty($department) || empty($course_strand)) {
         $_SESSION['error'] = "All fields are required.";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
@@ -80,21 +83,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $valid_departments = ['CCS','CBS','COE','Senior High School'];
     if (!in_array($department, $valid_departments, true)) {
         $_SESSION['error'] = "Invalid department selected.";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $lrn, $department);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
+        header("Location: register.php");
+        exit();
+    }
+
+    // Validate course/strand based on department
+    $valid_courses_strands = [
+        'CCS' => ['BSIS'],
+        'CBS' => ['BSAIS', 'BSENTREP'],
+        'COE' => ['BEED', 'BSED'],
+        'Senior High School' => ['ABM', 'TVL', 'GAS', 'HUMSS', 'STEM']
+    ];
+    if (!isset($valid_courses_strands[$department]) || !in_array($course_strand, $valid_courses_strands[$department], true)) {
+        $_SESSION['error'] = "Invalid course/strand selected for the chosen department.";
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
 
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $_SESSION['error'] = "Invalid email format.";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
 
     if ($password !== $confirm_password) {
         $_SESSION['error'] = "Passwords do not match.";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
@@ -102,7 +119,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Validate Student Number format: YY-XXXXXXX (e.g., 22-0002155)
     if (!preg_match('/^\d{2}-\d{7}$/', $student_number)) {
         $_SESSION['error'] = "Student Number must follow the format 'YY-XXXXXXX' (e.g., 22-0002155).";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
@@ -192,19 +209,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         } catch (Exception $e) { /* ignore */ }
 
+        // Ensure students.course_strand column exists
+        try {
+            $colCheckCourse = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students' AND COLUMN_NAME = 'course_strand'");
+            $colCheckCourse->execute();
+            if ((int)$colCheckCourse->fetchColumn() === 0) {
+                $conn->exec("ALTER TABLE students ADD COLUMN course_strand VARCHAR(50) NULL AFTER department");
+            }
+        } catch (Exception $e) { /* ignore */ }
+
         $stmt = $conn->prepare("SELECT * FROM students WHERE email = ? OR student_number = ?");
         $stmt->execute([$email, $student_number]);
 
         if ($stmt->rowCount() > 0) {
             $_SESSION['error'] = "Email or Student Number already exists.";
-            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department);
+            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
             header("Location: register.php");
             exit();
         }
 
         if (!preg_match('/[A-Z]/', $password) || !preg_match('/\d/', $password) || !preg_match('/[\W]/', $password)) {
             $_SESSION['error'] = "Password must contain at least one uppercase letter, one number, and one special character.";
-            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department);
+            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
             header("Location: register.php");
             exit();
         }
@@ -235,14 +261,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$imageSaved) {
             $_SESSION['error'] = "Please provide a profile picture (upload or capture).";
-            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department);
+            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
             header("Location: register.php");
             exit();
         }
 
         // Insert student (pending verification) using student_number; leave legacy student_id NULL to avoid conflicts
-        $stmt = $conn->prepare("INSERT INTO students (firstname, middlename, lastname, suffix, email, department, student_id, student_number, password, profile_pic, is_verified) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)");
-        $stmt->execute([$firstname, $middlename, $lastname, $suffix, $email, $department, $student_number, $hashed_password, $profilePicName, 0]);
+        $stmt = $conn->prepare("INSERT INTO students (firstname, middlename, lastname, suffix, email, department, course_strand, student_id, student_number, password, profile_pic, is_verified) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)");
+        $stmt->execute([$firstname, $middlename, $lastname, $suffix, $email, $department, $course_strand, $student_number, $hashed_password, $profilePicName, 0]);
 
         unset($_SESSION['old']);
         $_SESSION['success'] = "Registration successfully! Please wait for the Teacher to verify your account.";
@@ -250,7 +276,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit();
     } catch (PDOException $e) {
         $_SESSION['error'] = "Registration failed: " . $e->getMessage();
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
@@ -494,6 +520,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <option value="CBS" <?= ($oldDept==='CBS'?'selected':'') ?>>CBS (College of Business Studies)</option>
                         <option value="COE" <?= ($oldDept==='COE'?'selected':'') ?>>COE (College of Education)</option>
                         <option value="Senior High School" <?= ($oldDept==='Senior High School'?'selected':'') ?>>Senior High School</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Course/Strand Selection (Dynamic based on Department) -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4" id="course-strand-container" style="display: none;">
+                <div class="sm:col-span-2">
+                    <label for="course_strand" class="block text-sm font-medium text-gray-700 mb-1">
+                        <span id="course-strand-label">Course/Strand</span> <span class="text-red-500">*</span>
+                    </label>
+                    <select name="course_strand" id="course_strand" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required>
+                        <option value="">Select Course/Strand</option>
                     </select>
                 </div>
             </div>
@@ -776,6 +814,73 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             modeSel.addEventListener('change', applyPicMode);
             // Initialize state
             applyPicMode();
+        }
+    })();
+
+    // Dynamic Course/Strand Selection based on Department
+    (function setupCourseStrandSelection() {
+        const departmentSelect = document.getElementById('department');
+        const courseStrandContainer = document.getElementById('course-strand-container');
+        const courseStrandSelect = document.getElementById('course_strand');
+        const courseStrandLabel = document.getElementById('course-strand-label');
+
+        const courseStrandOptions = {
+            'CCS': {
+                label: 'Course',
+                options: ['BSIS']
+            },
+            'CBS': {
+                label: 'Course',
+                options: ['BSAIS', 'BSENTREP']
+            },
+            'COE': {
+                label: 'Course',
+                options: ['BEED', 'BSED']
+            },
+            'Senior High School': {
+                label: 'Strand',
+                options: ['ABM', 'TVL', 'GAS', 'HUMSS', 'STEM']
+            }
+        };
+
+        function updateCourseStrandOptions() {
+            const selectedDept = departmentSelect.value;
+            
+            if (selectedDept && courseStrandOptions[selectedDept]) {
+                const config = courseStrandOptions[selectedDept];
+                courseStrandLabel.textContent = config.label;
+                
+                // Clear existing options
+                courseStrandSelect.innerHTML = '<option value="">Select ' + config.label + '</option>';
+                
+                // Add new options
+                config.options.forEach(option => {
+                    const optionElement = document.createElement('option');
+                    optionElement.value = option;
+                    optionElement.textContent = option;
+                    <?php if (isset($old['course_strand'])): ?>
+                    if (option === <?php echo json_encode($old['course_strand']); ?>) {
+                        optionElement.selected = true;
+                    }
+                    <?php endif; ?>
+                    courseStrandSelect.appendChild(optionElement);
+                });
+                
+                // Show the container
+                courseStrandContainer.style.display = 'block';
+                courseStrandSelect.required = true;
+            } else {
+                // Hide the container if no department selected
+                courseStrandContainer.style.display = 'none';
+                courseStrandSelect.required = false;
+                courseStrandSelect.innerHTML = '<option value="">Select Course/Strand</option>';
+            }
+        }
+
+        if (departmentSelect) {
+            departmentSelect.addEventListener('change', updateCourseStrandOptions);
+            // Initialize on page load
+            updateCourseStrandOptions();
         }
     })();
 </script>

@@ -129,6 +129,7 @@ foreach ($unverified_students as $s) {
                             <th class="border border-gray-300 px-4 py-3 text-left text-sm font-semibold text-gray-700">Email</th>
                             <th class="border border-gray-300 px-4 py-3 text-left text-sm font-semibold text-gray-700">Student ID</th>
                             <th class="border border-gray-300 px-4 py-3 text-left text-sm font-semibold text-gray-700">Department</th>
+                            <th class="border border-gray-300 px-4 py-3 text-left text-sm font-semibold text-gray-700">Course/Strand</th>
                             <th class="border border-gray-300 px-4 py-3 text-left text-sm font-semibold text-gray-700">Actions</th>
                         </tr>
                     </thead>
@@ -150,9 +151,12 @@ foreach ($unverified_students as $s) {
                                     <td class="border border-gray-300 px-4 py-3 text-gray-700">
                                         <?= htmlspecialchars($student['department']); ?>
                                     </td>
+                                    <td class="border border-gray-300 px-4 py-3 text-gray-700">
+                                        <?= htmlspecialchars($student['course_strand'] ?? 'N/A'); ?>
+                                    </td>
                                     <td class="border border-gray-300 px-4 py-3">
                                         <div class="flex flex-wrap gap-2">
-                                            <button type="button" onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'])) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>')" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded font-semibold shadow transition duration-200">
+                                            <button type="button" onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'])) ?>','<?= htmlspecialchars(addslashes($student['course_strand'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>')" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded font-semibold shadow transition duration-200">
                                                 <i class="fas fa-user mr-2"></i> View Profile
                                             </button>
                                             <form action="approve_student.php" method="POST" class="inline">
@@ -175,7 +179,7 @@ foreach ($unverified_students as $s) {
                             <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="7" class="text-center py-8 text-gray-600 dark:text-gray-400">
+                                <td colspan="6" class="text-center py-8 text-gray-600 dark:text-gray-400">
                                     <div class="flex flex-col items-center">
                                         <i class="fas fa-users text-4xl mb-2 opacity-50"></i>
                                         <span class="text-lg">No students waiting for verification.</span>
@@ -199,9 +203,10 @@ foreach ($unverified_students as $s) {
                                     <p class="text-xs text-gray-500">Email: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['email']); ?></span></p>
                                     <p class="text-xs text-gray-500">Student ID: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['student_id'] ?? ''); ?></span></p>
                                     <p class="text-xs text-gray-500">Department: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['department']); ?></span></p>
+                                    <p class="text-xs text-gray-500"><?= ($student['department'] === 'Senior High School') ? 'Strand:' : 'Course:'; ?> <span class="font-medium text-gray-700"><?= htmlspecialchars($student['course_strand'] ?? 'N/A'); ?></span></p>
                                 </div>
                                 <div class="shrink-0">
-                                    <button type="button" onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['lrn'])) ?>','<?= htmlspecialchars(addslashes($student['grade'])) ?>','<?= htmlspecialchars(addslashes($student['department'])) ?>','<?= htmlspecialchars(addslashes($student['section'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>','<?= isset($student['group_number']) ? (int)$student['group_number'] : '' ?>')" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm">
+                                    <button type="button" onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'])) ?>','<?= htmlspecialchars(addslashes($student['course_strand'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>')" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm">
                                         <i class="fas fa-user mr-1"></i> View
                                     </button>
                                 </div>
@@ -242,14 +247,17 @@ foreach ($unverified_students as $s) {
             <p id="modalEmail" class="text-gray-700 dark:text-gray-200 mb-1 text-center"></p>
             <p id="modalLRN" class="text-gray-700 dark:text-gray-200 mb-1 text-center"></p>
             <p id="modalStrand" class="text-gray-700 dark:text-gray-200 mb-1 text-center"></p>
+            <p id="modalCourseStrand" class="text-gray-700 dark:text-gray-200 mb-1 text-center"></p>
         </div>
     </div>
     <script>
-        function showProfileModal(firstname, lastname, email, studentId, department, profilePic) {
+        function showProfileModal(firstname, lastname, email, studentId, department, courseStrand, profilePic) {
             document.getElementById('modalName').textContent = firstname + ' ' + lastname;
             document.getElementById('modalEmail').textContent = 'Email: ' + email;
             document.getElementById('modalLRN').textContent = 'Student ID: ' + studentId;
             document.getElementById('modalStrand').textContent = 'Department: ' + department;
+            const label = (department === 'Senior High School') ? 'Strand:' : 'Course:';
+            document.getElementById('modalCourseStrand').textContent = label + ' ' + (courseStrand || 'N/A');
             document.getElementById('modalProfilePic').src = profilePic ? 'images/' + profilePic : 'images/default.jpg';
             document.getElementById('profileModal').classList.remove('hidden');
         }

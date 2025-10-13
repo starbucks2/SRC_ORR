@@ -14,6 +14,7 @@ $lastname = $_SESSION['lastname'] ?? 'Student';
 $email = $_SESSION['email'] ?? 'Not Available';
 $profile_pic = isset($_SESSION['profile_pic']) ? 'images/' . $_SESSION['profile_pic'] : 'images/default.jpg';
 $department = $_SESSION['department'] ?? '';
+$course_strand = $_SESSION['course_strand'] ?? '';
 $student_number = $_SESSION['student_number'] ?? '';
 
 if (!file_exists($profile_pic) || empty($_SESSION['profile_pic'])) {
@@ -21,11 +22,12 @@ if (!file_exists($profile_pic) || empty($_SESSION['profile_pic'])) {
 }
 
 // Fetch additional profile fields
-$stmt = $conn->prepare("SELECT student_number FROM students WHERE student_id = ?");
+$stmt = $conn->prepare("SELECT student_number, course_strand FROM students WHERE student_id = ?");
 $stmt->execute([$student_id]);
 $user_data = $stmt->fetch();
 // Prefer DB values when available
 if (!empty($user_data['student_number'])) { $student_number = $user_data['student_number']; }
+if (!empty($user_data['course_strand'])) { $course_strand = $user_data['course_strand']; }
 
 // Password change is always allowed (no 30-day restriction)
 $can_change_password = true;
@@ -175,6 +177,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <div><span class="font-medium">Student Number:</span> <?php echo htmlspecialchars($student_number); ?></div>
                         <?php endif; ?>
                         <div><span class="font-medium">Department:</span> <?php echo htmlspecialchars($department); ?></div>
+                        <?php if (!empty($course_strand)): ?>
+                        <div><span class="font-medium"><?php echo ($department === 'Senior High School') ? 'Strand:' : 'Course:'; ?></span> <?php echo htmlspecialchars($course_strand); ?></div>
+                        <?php endif; ?>
                         <div><span class="font-medium">Email:</span> <?php echo htmlspecialchars($email); ?></div>
                     </div>
                 </div>

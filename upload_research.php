@@ -18,19 +18,7 @@ if (!isset($_SESSION['student_id'])) {
     exit();
 }
 
-// Role-based restriction removed: all students may upload during an active submission window
-
-// Check if there's an active submission period
-$query = "SELECT * FROM announcements WHERE deadline > NOW() ORDER BY deadline ASC LIMIT 1";
-$stmt = $conn->prepare($query);
-$stmt->execute();
-$activeAnnouncement = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$activeAnnouncement) {
-    $_SESSION['error'] = "The submission period has ended. Please wait for the next submission period.";
-    header("Location: student_dashboard.php");
-    exit();
-}
+// Role-based restriction removed: all students may upload anytime (no announcement requirement)
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $student_id = $_POST['student_id'];
@@ -41,14 +29,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $keywords = trim($_POST['keywords'] ?? '');
     // Department targeting (replaces legacy 'strand')
     $department = $_POST['department'] ?? ($_SESSION['department'] ?? '');
-    // Derive student_number from the database for this student
+    // Course/Strand
+    $course_strand = $_POST['course_strand'] ?? ($_SESSION['course_strand'] ?? '');
+    // Derive student_number and course_strand from the database for this student
     $student_number = null;
     try {
-        $gstmt = $conn->prepare("SELECT student_number FROM students WHERE student_id = ?");
+        $gstmt = $conn->prepare("SELECT student_number, course_strand FROM students WHERE student_id = ?");
         $gstmt->execute([$student_id]);
         $grow = $gstmt->fetch(PDO::FETCH_ASSOC);
         if ($grow && isset($grow['student_number'])) {
             $student_number = (string)$grow['student_number'];
+        }
+        if ($grow && isset($grow['course_strand']) && empty($course_strand)) {
+            $course_strand = (string)$grow['course_strand'];
         }
         // group_number removed from upload flow
     } catch (Exception $e) { /* ignore; allow null if not found */ }
@@ -214,6 +207,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         if ($chkKw->rowCount() == 0) {
             $conn->exec("ALTER TABLE research_submission ADD COLUMN keywords VARCHAR(255) NULL AFTER abstract");
         }
+        // Ensure course_strand column exists
+        $chkCs = $conn->prepare("SHOW COLUMNS FROM research_submission LIKE 'course_strand'");
+        $chkCs->execute();
+        if ($chkCs->rowCount() == 0) {
+            $conn->exec("ALTER TABLE research_submission ADD COLUMN course_strand VARCHAR(50) NULL AFTER department");
+        }
         // If legacy 'strand' exists but 'department' is missing, above adds department; we won't write to strand anymore
         // Ensure 'year' column can store Academic Year strings e.g., 'S.Y. 2025-2026'
         $ctype = $conn->prepare("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'research_submission' AND COLUMN_NAME = 'year'");
@@ -227,9 +226,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     // --- Insert into Database ---
     try {
         $stmt = $conn->prepare("INSERT INTO research_submission 
-            (student_id, student_number, title, year, abstract, keywords, members, department, document, image, status, submission_date) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
-        $stmt->execute([$student_id, $student_number, $title, $year, $abstract, $keywords, $members, $department, $document, $image, $status]);
+            (student_id, student_number, title, year, abstract, keywords, members, department, course_strand, document, image, status, submission_date) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+        $stmt->execute([$student_id, $student_number, $title, $year, $abstract, $keywords, $members, $department, $course_strand, $document, $image, $status]);
 
         // Activity log
         try {
@@ -237,6 +236,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 'title' => $title,
                 'student_number' => $student_number,
                 'department' => $department,
+                'course_strand' => $course_strand,
                 'year' => $year,
                 'document' => $document
             ]);

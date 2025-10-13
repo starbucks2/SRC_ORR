@@ -146,12 +146,13 @@ try {
                             <th class="px-6 py-3 border-b-2 border-gray-200 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">First Name</th>
                             <th class="px-6 py-3 border-b-2 border-gray-200 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Last Name</th>
                             <th class="px-6 py-3 border-b-2 border-gray-200 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Department</th>
+                            <th class="px-6 py-3 border-b-2 border-gray-200 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Course/Strand</th>
                             <th class="px-6 py-3 border-b-2 border-gray-200 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Email</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-200">
                         <?php if (empty($verifiedStudents)): ?>
-                            <tr><td colspan="6" class="px-6 py-4 text-center text-gray-600">No verified students.</td></tr>
+                            <tr><td colspan="7" class="px-6 py-4 text-center text-gray-600">No verified students.</td></tr>
                         <?php else: ?>
                             <?php foreach ($verifiedStudents as $row): ?>
                                 <tr class="hover:bg-gray-50">
@@ -165,6 +166,7 @@ try {
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['firstname']); ?></td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['lastname']); ?></td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['department'] ?? ''); ?></td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['course_strand'] ?? 'N/A'); ?></td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['email']); ?></td>
                                 </tr>
                             <?php endforeach; ?>
@@ -191,13 +193,14 @@ try {
                                 <div class="min-w-0">
                                     <h4 class="text-base font-semibold text-gray-900 truncate"><?= htmlspecialchars(($row['firstname']??'').' '.($row['lastname']??'')) ?></h4>
                                     <p class="text-xs text-gray-500">Student ID: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['lrn'] ?? '') ?></span></p>
-                                    <p class="text-xs text-gray-500">Year Level/Department: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['grade'] ?? '') ?></span> • <span class="font-medium text-gray-700"><?= htmlspecialchars($row['department'] ?? '') ?></span></p>
+                                    <p class="text-xs text-gray-500">Department: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['department'] ?? '') ?></span></p>
+                                    <p class="text-xs text-gray-500"><?= ($row['department'] === 'Senior High School') ? 'Strand:' : 'Course:'; ?> <span class="font-medium text-gray-700"><?= htmlspecialchars($row['course_strand'] ?? 'N/A') ?></span></p>
                                     <p class="text-xs text-gray-500">Section/Group: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['section'] ?? '-') ?></span> • <span class="font-medium text-gray-700"><?= (!empty($row['group_number']) && (int)$row['group_number']>0) ? ('Group '.(int)$row['group_number']) : '-' ?></span></p>
                                     <p class="text-xs text-gray-500">Email: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['email'] ?? '') ?></span></p>
                                 </div>
                             </div>
                             <div class="mt-3 flex justify-end">
-                                <button type="button" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm" onclick="showProfileModal('<?= htmlspecialchars(addslashes($row['firstname']??'')) ?>','<?= htmlspecialchars(addslashes($row['lastname']??'')) ?>','<?= htmlspecialchars(addslashes($row['email']??'')) ?>','<?= htmlspecialchars(addslashes(($row['lrn'] ?? ($row['student_id'] ?? '')))) ?>','<?= htmlspecialchars(addslashes($row['grade']??'')) ?>','<?= htmlspecialchars(addslashes($row['department']??'')) ?>','<?= htmlspecialchars(addslashes($row['section']??'')) ?>','<?= isset($row['group_number']) ? (int)$row['group_number'] : '' ?>','<?= htmlspecialchars(addslashes($row['profile_pic']??'')) ?>')">
+                                <button type="button" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm" onclick="showProfileModal('<?= htmlspecialchars(addslashes($row['firstname']??'')) ?>','<?= htmlspecialchars(addslashes($row['lastname']??'')) ?>','<?= htmlspecialchars(addslashes($row['email']??'')) ?>','<?= htmlspecialchars(addslashes($row['student_number'] ?? '')) ?>','<?= htmlspecialchars(addslashes($row['department']??'')) ?>','<?= htmlspecialchars(addslashes($row['course_strand']??'')) ?>','<?= htmlspecialchars(addslashes($row['profile_pic']??'')) ?>')">
                                     <i class="fas fa-user mr-1"></i> View
                                 </button>
                             </div>
@@ -216,10 +219,8 @@ try {
                         <div class="text-sm text-gray-700 space-y-1">
                             <p id="modalEmail"></p>
                             <p id="modalLRN"></p>
-                            <p id="modalGrade"></p>
                             <p id="modalStrand"></p>
-                            <p id="modalSection"></p>
-                            <p id="modalGroup"></p>
+                            <p id="modalCourseStrand"></p>
                         </div>
                     </div>
                 </div>
@@ -229,16 +230,13 @@ try {
                 const profileModal = document.getElementById('profileModal');
                 const modalContent = profileModal.querySelector('.transform');
 
-                function showProfileModal(firstname, lastname, email, lrn, grade, department, section, groupNumber, profilePic) {
+                function showProfileModal(firstname, lastname, email, studentNumber, department, courseStrand, profilePic) {
                     document.getElementById('modalName').textContent = firstname + ' ' + lastname;
                     document.getElementById('modalEmail').textContent = 'Email: ' + email;
-                    document.getElementById('modalLRN').textContent = 'Student ID: ' + (lrn || '');
-                    document.getElementById('modalGrade').textContent = 'Year Level: ' + (grade || '');
-                    // Keep existing element id 'modalStrand' but display Department value
+                    document.getElementById('modalLRN').textContent = 'Student Number: ' + (studentNumber || '');
                     document.getElementById('modalStrand').textContent = 'Department: ' + (department || '');
-                    document.getElementById('modalSection').textContent = 'Section: ' + (section || '');
-                    var groupText = (groupNumber && parseInt(groupNumber) > 0) ? ('Group: Group ' + parseInt(groupNumber)) : 'Group: -';
-                    document.getElementById('modalGroup').textContent = groupText;
+                    const label = (department === 'Senior High School') ? 'Strand:' : 'Course:';
+                    document.getElementById('modalCourseStrand').textContent = label + ' ' + (courseStrand || 'N/A');
                     document.getElementById('modalProfilePic').src = profilePic ? 'images/' + profilePic : 'images/default.jpg';
                     
                     profileModal.classList.remove('hidden');
