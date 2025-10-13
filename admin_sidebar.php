@@ -95,7 +95,6 @@ $view_allowed = $is_admin || in_array('view_students', $permissions) || in_array
     <?php if ($view_allowed): ?>
     <li><a href="view_students.php" class="<?= $base_link_cls . (___is_active($___current, 'view_students.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-user-tag mr-3"></i> View Students</a></li>
     <?php endif; ?>
-        <li><a href="announcements.php" class="<?= $base_link_cls . (___is_active($___current, 'announcements.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-bullhorn mr-3"></i> Announcements</a></li>
         <!-- New: Upload Research Project -->
         <li><a href="admin_upload_research.php" class="<?= $base_link_cls . (___is_active($___current, 'admin_upload_research.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-upload mr-3"></i> Upload Research Project</a></li>
         <!-- New: Create Students via Import -->

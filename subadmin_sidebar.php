@@ -108,29 +108,6 @@ if ($is_admin) {
     <?php if ($is_admin || $is_subadmin): ?>
         <li><a href="subadmin_view_students.php" class="<?= $base_link_cls . (___is_active($___current, 'subadmin_view_students.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-user-tag mr-3"></i> View Students</a></li>
     <?php endif; ?>
-        <li>
-            <a href="subadmin_announcements.php" class="<?= $base_link_cls . (___is_active($___current, 'subadmin_announcements.php') ? $active_cls : $hover_cls) ?> relative">
-                <i class="fas fa-bullhorn mr-3"></i> Announcements
-                <?php
-                // Show badge if there are unread/new announcements for subadmin
-                try {
-                    include_once 'db.php';
-                    if (isset($_SESSION['subadmin_id'])) {
-                        $subadmin_id = $_SESSION['subadmin_id'];
-                        // Count announcements not yet acknowledged by this subadmin
-                        $stmt = $conn->prepare("SELECT COUNT(*) FROM announcements a WHERE NOT EXISTS (SELECT 1 FROM announcement_reads ar WHERE ar.announcement_id = a.id AND ar.subadmin_id = ?) AND a.target_audience IN ('all','subadmin')");
-                        $stmt->execute([$subadmin_id]);
-                        $unread_count = $stmt->fetchColumn();
-                        if ($unread_count > 0) {
-                            echo '<span class="absolute right-2 top-2 bg-red-600 text-white text-xs font-bold px-2 py-0.5 rounded-full">' . $unread_count . '</span>';
-                        }
-                    }
-                } catch (Exception $e) {
-                    // Fail silently
-                }
-                ?>
-            </a>
-        </li>
         
         <li><a href="logout.php" class="flex items-center p-3 rounded-lg hover:bg-red-700 text-red-200"><i class="fas fa-sign-out-alt mr-3"></i> Sign Out</a></li>
     </ul>
