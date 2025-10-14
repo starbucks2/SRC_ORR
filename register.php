@@ -38,12 +38,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $confirm_password = $_POST['confirm_password'];
     // Support legacy field name 'lrn' but use 'student_id' moving forward
     $student_id_raw = isset($_POST['student_id']) ? trim($_POST['student_id']) : trim($_POST['lrn'] ?? '');
-    // Normalize Student ID to dash format 'YY-XXXXXXX' regardless of input
+    // Remove all non-digits
     $sn_digits = preg_replace('/\D/', '', $student_id_raw);
-    $student_id = $student_id_raw;
-    if (strlen($sn_digits) >= 9) {
-        $student_id = substr($sn_digits, 0, 2) . '-' . substr($sn_digits, 2, 7);
-    }
+    $student_id = $sn_digits; // Store as-is for now, will validate based on department
     // Department selection
     $department = isset($_POST['department']) ? trim($_POST['department']) : '';
     // Course/Strand selection (depends on department)
@@ -116,12 +113,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit();
     }
 
-    // Validate Student ID format: YY-XXXXXXX (e.g., 22-0002155)
-    if (!preg_match('/^\d{2}-\d{7}$/', $student_id)) {
-        $_SESSION['error'] = "Student ID must follow the format 'YY-XXXXXXX' (e.g., 22-0002155).";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
-        header("Location: register.php");
-        exit();
+    // Validate Student ID/LRN format based on department
+    if ($department === 'Senior High School') {
+        // Senior High School: LRN must be exactly 12 digits
+        if (!preg_match('/^\d{12}$/', $student_id)) {
+            $_SESSION['error'] = "LRN NO. must be exactly 12 digits for Senior High School students.";
+            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
+            header("Location: register.php");
+            exit();
+        }
+    } else {
+        // College (CCS, CBS, COE): Student ID format YY-XXXXXXX
+        if (strlen($sn_digits) >= 9) {
+            $student_id = substr($sn_digits, 0, 2) . '-' . substr($sn_digits, 2, 7);
+        }
+        if (!preg_match('/^\d{2}-\d{7}$/', $student_id)) {
+            $_SESSION['error'] = "Student ID must follow the format 'YY-XXXXXXX' (e.g., 22-0002155) for college students.";
+            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
+            header("Location: register.php");
+            exit();
+        }
     }
 
     try {
@@ -482,7 +493,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <span id="student-id-label">Student ID</span> <span class="text-red-500">*</span>
                 </label>
                 <span class="absolute left-3 top-9 text-gray-400"><i class="fas fa-id-card"></i></span>
-                <input type="text" name="lrn" id="lrn" maxlength="10" pattern="^\d{2}-\d{7}$" inputmode="numeric" placeholder="YY-XXXXXXX" class="mt-1 block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required oninput="validateLRN(this)" value="<?php echo isset($old['student_id']) ? htmlspecialchars($old['student_id']) : ''; ?>">
+                <input type="text" name="lrn" id="lrn" inputmode="numeric" placeholder="YY-XXXXXXX" class="mt-1 block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required oninput="validateLRN(this)" value="<?php echo isset($old['student_id']) ? htmlspecialchars($old['student_id']) : ''; ?>">
                 <span id="lrn-error" class="text-xs text-red-600 mt-1 block"></span>
             </div>
            
@@ -554,28 +565,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // Student ID validation/format: enforce 'YY-XXXXXXX'
+        // Student ID/LRN validation: format depends on department
         function validateLRN(input) {
-            const prev = input.value;
-            // Keep digits only first
-            let digits = prev.replace(/\D/g, '').slice(0, 9); // 2 + 7 = 9 digits
-            let formatted = digits;
-            if (digits.length > 2) {
-                formatted = digits.slice(0,2) + '-' + digits.slice(2, 9);
-            }
-            // If 3-? digits, insert dash after 2; if <=2, no dash
-            if (digits.length <= 2) {
-                formatted = digits;
-            }
-            input.value = formatted;
-
+            const departmentSelect = document.getElementById('department');
+            const department = departmentSelect ? departmentSelect.value : '';
             const error = document.getElementById('lrn-error');
-            if (formatted.length > 0 && !/^\d{2}-\d{0,7}$/.test(formatted)) {
-                error.textContent = "Format: YY-XXXXXXX (e.g., 22-0002155)";
-            } else if (/^\d{2}-\d{7}$/.test(formatted)) {
-                error.textContent = '';
+            const prev = input.value;
+            let digits = prev.replace(/\D/g, '');
+
+            if (department === 'Senior High School') {
+                // Senior High School: 12 digits LRN, no formatting
+                digits = digits.slice(0, 12);
+                input.value = digits;
+                
+                if (digits.length === 0) {
+                    error.textContent = '';
+                } else if (digits.length < 12) {
+                    error.textContent = `LRN NO. must be 12 digits (${digits.length}/12)`;
+                } else {
+                    error.textContent = '';
+                }
+            } else if (department && department !== '') {
+                // College: YY-XXXXXXX format (9 digits total)
+                digits = digits.slice(0, 9);
+                let formatted = digits;
+                if (digits.length > 2) {
+                    formatted = digits.slice(0, 2) + '-' + digits.slice(2, 9);
+                }
+                input.value = formatted;
+                
+                if (formatted.length === 0) {
+                    error.textContent = '';
+                } else if (!/^\d{2}-\d{7}$/.test(formatted)) {
+                    error.textContent = "Format: YY-XXXXXXX (e.g., 22-0002155)";
+                } else {
+                    error.textContent = '';
+                }
             } else {
-                error.textContent = "Format: YY-XXXXXXX (e.g., 22-0002155)";
+                // No department selected yet
+                input.value = digits.slice(0, 12);
+                error.textContent = 'Please select a department first';
             }
         }
 
@@ -830,6 +859,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         function updateCourseStrandOptions() {
             const selectedDept = departmentSelect.value;
+            const lrnInput = document.getElementById('lrn');
+            const lrnError = document.getElementById('lrn-error');
             
             if (selectedDept && courseStrandOptions[selectedDept]) {
                 const config = courseStrandOptions[selectedDept];
@@ -838,6 +869,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Update Student ID label based on department
                 if (studentIdLabel) {
                     studentIdLabel.textContent = config.studentIdLabel;
+                }
+                
+                // Update placeholder and clear input when department changes
+                if (lrnInput) {
+                    if (selectedDept === 'Senior High School') {
+                        lrnInput.placeholder = '12-digit LRN';
+                        lrnInput.maxLength = 12;
+                    } else {
+                        lrnInput.placeholder = 'YY-XXXXXXX';
+                        lrnInput.maxLength = 10;
+                    }
+                    // Clear the input and error when department changes
+                    lrnInput.value = '';
+                    if (lrnError) lrnError.textContent = '';
                 }
                 
                 // Clear existing options
@@ -868,6 +913,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (studentIdLabel) {
                     studentIdLabel.textContent = 'Student ID';
                 }
+                if (lrnInput) {
+                    lrnInput.placeholder = 'YY-XXXXXXX';
+                    lrnInput.value = '';
+                }
+                if (lrnError) lrnError.textContent = '';
             }
         }
 
