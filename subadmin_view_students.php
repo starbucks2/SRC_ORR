@@ -173,7 +173,7 @@ try {
     $diagnosticHtml .= "<div class='overflow-x-auto'><table class='min-w-full bg-white border mt-2'><thead class='bg-gray-100'><tr><th class='px-4 py-2'>Student Number</th><th class='px-4 py-2'>Department</th><th class='px-4 py-2'>Normalized</th><th class='px-4 py-2'>Verified</th></tr></thead><tbody>";
     $sample = array_slice($verifiedStudents, 0, 30);
     foreach ($sample as $srow) {
-        $sr_lrn = htmlspecialchars($srow['student_number'] ?? '');
+        $sr_lrn = htmlspecialchars($srow['student_id'] ?? '');
         $sr_strand = htmlspecialchars($srow['department'] ?? ($srow['strand'] ?? ''));
         $sr_norm = htmlspecialchars(preg_replace('/[^a-z0-9]/', '', strtolower($srow['department'] ?? ($srow['strand'] ?? ''))));
         $sr_ver = htmlspecialchars($srow['is_verified'] ?? '');
@@ -252,12 +252,12 @@ try {
                     <tbody class="divide-y divide-gray-200">
                         <?php if (!empty($verifiedStudents)): ?>
                             <?php foreach ($verifiedStudents as $row): ?>
-                                <tr class="hover:bg-gray-50" data-name="<?= htmlspecialchars(strtolower(($row['firstname']??'').' '.($row['lastname']??''))) ?>" data-email="<?= htmlspecialchars(strtolower($row['email'] ?? '')) ?>" data-studnum="<?= htmlspecialchars(strtolower($row['student_number'] ?? '')) ?>" data-department="<?= htmlspecialchars(strtolower($row['department'] ?? ($row['strand'] ?? ''))) ?>">
+                                <tr class="hover:bg-gray-50" data-name="<?= htmlspecialchars(strtolower(($row['firstname']??'').' '.($row['lastname']??''))) ?>" data-email="<?= htmlspecialchars(strtolower($row['email'] ?? '')) ?>" data-studnum="<?= htmlspecialchars(strtolower($row['student_id'] ?? '')) ?>" data-department="<?= htmlspecialchars(strtolower($row['department'] ?? ($row['strand'] ?? ''))) ?>">
                                     <td class="px-6 py-4 whitespace-nowrap">
                                         <?php $pic = !empty($row['profile_pic']) ? 'images/' . htmlspecialchars($row['profile_pic']) : 'images/default.jpg'; ?>
                                         <img src="<?= $pic ?>" alt="Profile" class="w-10 h-10 rounded-full object-cover border" />
                                     </td>
-                                    <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($row['student_number'] ?? 'N/A'); ?></td>
+                                    <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($row['student_id'] ?? 'N/A'); ?></td>
                                     <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($row['firstname'] ?? 'N/A'); ?></td>
                                     <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($row['lastname'] ?? 'N/A'); ?></td>
                                     <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($row['email'] ?? 'N/A'); ?></td>
@@ -283,12 +283,12 @@ try {
                 <?php if (!empty($verifiedStudents)): ?>
                     <?php foreach ($verifiedStudents as $row): ?>
                         <?php $pic = !empty($row['profile_pic']) ? 'images/' . htmlspecialchars($row['profile_pic']) : 'images/default.jpg'; ?>
-                        <div class="bg-white rounded-lg shadow p-4" data-name="<?= htmlspecialchars(strtolower(($row['firstname']??'').' '.($row['lastname']??''))) ?>" data-email="<?= htmlspecialchars(strtolower($row['email'] ?? '')) ?>" data-studnum="<?= htmlspecialchars(strtolower($row['student_number'] ?? '')) ?>" data-department="<?= htmlspecialchars(strtolower($row['department'] ?? ($row['strand'] ?? ''))) ?>">
+                        <div class="bg-white rounded-lg shadow p-4" data-name="<?= htmlspecialchars(strtolower(($row['firstname']??'').' '.($row['lastname']??''))) ?>" data-email="<?= htmlspecialchars(strtolower($row['email'] ?? '')) ?>" data-studnum="<?= htmlspecialchars(strtolower($row['student_id'] ?? '')) ?>" data-department="<?= htmlspecialchars(strtolower($row['department'] ?? ($row['strand'] ?? ''))) ?>">
                             <div class="flex items-start gap-3">
                                 <img src="<?= $pic ?>" alt="Profile" class="w-12 h-12 rounded-full object-cover border">
                                 <div class="min-w-0">
                                     <h4 class="text-base font-semibold text-gray-900 truncate"><?= htmlspecialchars(($row['firstname']??'').' '.($row['lastname']??'')) ?></h4>
-                                    <p class="text-xs text-gray-500">Student Number: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['student_number'] ?? 'N/A') ?></span></p>
+                                    <p class="text-xs text-gray-500">Student Number: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['student_id'] ?? 'N/A') ?></span></p>
                                     <p class="text-xs text-gray-500">Email: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['email'] ?? 'N/A') ?></span></p>
                                     <p class="text-xs text-gray-500">Department: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['department'] ?? ($row['strand'] ?? 'Not Set')) ?></span></p>
                                 </div>
@@ -299,7 +299,7 @@ try {
                                 <?php else: ?>
                                     <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">Pending</span>
                                 <?php endif; ?>
-                                <button type="button" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm" onclick="showProfileModal('<?= htmlspecialchars(addslashes($row['firstname']??'')) ?>','<?= htmlspecialchars(addslashes($row['lastname']??'')) ?>','<?= htmlspecialchars(addslashes($row['email']??'')) ?>','<?= htmlspecialchars(addslashes($row['student_number']??'')) ?>','<?= htmlspecialchars(addslashes($row['grade'] ?? '')) ?>','<?= htmlspecialchars(addslashes($row['department'] ?? ($row['strand']??''))) ?>','','','<?= htmlspecialchars(addslashes($row['profile_pic']??'')) ?>')">
+                                <button type="button" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm" onclick="showProfileModal('<?= htmlspecialchars(addslashes($row['firstname']??'')) ?>','<?= htmlspecialchars(addslashes($row['lastname']??'')) ?>','<?= htmlspecialchars(addslashes($row['email']??'')) ?>','<?= htmlspecialchars(addslashes($row['student_id']??'')) ?>','<?= htmlspecialchars(addslashes($row['grade'] ?? '')) ?>','<?= htmlspecialchars(addslashes($row['department'] ?? ($row['strand']??''))) ?>','','','<?= htmlspecialchars(addslashes($row['profile_pic']??'')) ?>')">
                                     <i class="fas fa-user mr-1"></i> View
                                 </button>
                             </div>

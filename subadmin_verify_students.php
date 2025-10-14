@@ -180,7 +180,7 @@ try {
                                         <?= htmlspecialchars($student['email']); ?>
                                     </td>
                                     <td class="border border-gray-300 dark:border-gray-600 px-4 py-3 text-gray-700 dark:text-gray-300">
-                                        <?= htmlspecialchars($student['student_number'] ?? ''); ?>
+                                        <?= htmlspecialchars($student['student_id'] ?? ''); ?>
                                     </td>
                                     <td class="border border-gray-300 dark:border-gray-600 px-4 py-3 text-gray-700 dark:text-gray-300">
                                         <?= htmlspecialchars($student['department'] ?? ($student['strand'] ?? '')); ?>
@@ -189,7 +189,7 @@ try {
                                         <div class="flex flex-col space-y-1.5">
                                             <!-- View Profile Button -->
                                             <button type="button" 
-                                                onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_number'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'] ?? ($student['strand'] ?? ''))) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>')" 
+                                                onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'] ?? ($student['strand'] ?? ''))) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>')" 
                                                 class="inline-flex items-center justify-center w-full bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm font-medium shadow hover:shadow-md transform hover:-translate-y-0.5 transition duration-200">
                                                 <i class="fas fa-user mr-1.5"></i> View Profile
                                             </button>
@@ -243,13 +243,13 @@ try {
                                 <div class="min-w-0">
                                     <h4 class="text-base font-semibold text-gray-900 truncate"><?= htmlspecialchars($student['firstname'] . ' ' . $student['lastname']); ?></h4>
                                     <p class="text-xs text-gray-500">Email: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['email']); ?></span></p>
-                                    <p class="text-xs text-gray-500">Student #: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['student_number'] ?? 'N/A'); ?></span></p>
+                                    <p class="text-xs text-gray-500">Student #: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['student_id'] ?? 'N/A'); ?></span></p>
                                     <p class="text-xs text-gray-500">Department: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['department'] ?? ($student['strand'] ?? 'N/A')); ?></span></p>
                                 </div>
                             </div>
                             <div class="mt-3 grid grid-cols-2 gap-2">
                                 <button type="button" 
-                                    onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_number'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'] ?? ($student['strand'] ?? ''))) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>')" 
+                                    onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'] ?? ($student['strand'] ?? ''))) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>')" 
                                     class="inline-flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-sm font-medium shadow">
                                     <i class="fas fa-user mr-1"></i> View
                                 </button>

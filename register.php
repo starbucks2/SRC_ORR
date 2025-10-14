@@ -36,13 +36,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = filter_var($_POST['email'], FILTER_SANITIZE_EMAIL);
     $password = $_POST['password'];
     $confirm_password = $_POST['confirm_password'];
-    // Support legacy field name 'lrn' but use 'student_number' moving forward
-    $student_number_raw = isset($_POST['student_number']) ? trim($_POST['student_number']) : trim($_POST['lrn'] ?? '');
-    // Normalize Student Number to dash format 'YY-XXXXXXX' regardless of input
-    $sn_digits = preg_replace('/\D/', '', $student_number_raw);
-    $student_number = $student_number_raw;
+    // Support legacy field name 'lrn' but use 'student_id' moving forward
+    $student_id_raw = isset($_POST['student_id']) ? trim($_POST['student_id']) : trim($_POST['lrn'] ?? '');
+    // Normalize Student ID to dash format 'YY-XXXXXXX' regardless of input
+    $sn_digits = preg_replace('/\D/', '', $student_id_raw);
+    $student_id = $student_id_raw;
     if (strlen($sn_digits) >= 9) {
-        $student_number = substr($sn_digits, 0, 2) . '-' . substr($sn_digits, 2, 7);
+        $student_id = substr($sn_digits, 0, 2) . '-' . substr($sn_digits, 2, 7);
     }
     // Department selection
     $department = isset($_POST['department']) ? trim($_POST['department']) : '';
@@ -58,22 +58,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!is_dir($targetDir)) { @mkdir($targetDir, 0777, true); }
 
     // Helper: store old values except password and file
-    function store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department='', $course_strand='') {
+    function store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department='', $course_strand='') {
         $_SESSION['old'] = [
             'firstname' => $firstname,
             'middlename' => $middlename,
             'lastname' => $lastname,
             'suffix' => $suffix,
             'email' => $email,
-            'student_number' => $student_number,
+            'student_id' => $student_id,
             'department' => $department,
             'course_strand' => $course_strand
         ];
     }
 
-    if (empty($firstname) || empty($lastname) || empty($email) || empty($password) || empty($student_number) || empty($department) || empty($course_strand)) {
+    if (empty($firstname) || empty($lastname) || empty($email) || empty($password) || empty($student_id) || empty($department) || empty($course_strand)) {
         $_SESSION['error'] = "All fields are required.";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
@@ -83,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $valid_departments = ['CCS','CBS','COE','Senior High School'];
     if (!in_array($department, $valid_departments, true)) {
         $_SESSION['error'] = "Invalid department selected.";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
@@ -97,29 +97,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     ];
     if (!isset($valid_courses_strands[$department]) || !in_array($course_strand, $valid_courses_strands[$department], true)) {
         $_SESSION['error'] = "Invalid course/strand selected for the chosen department.";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
 
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $_SESSION['error'] = "Invalid email format.";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
 
     if ($password !== $confirm_password) {
         $_SESSION['error'] = "Passwords do not match.";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
 
-    // Validate Student Number format: YY-XXXXXXX (e.g., 22-0002155)
-    if (!preg_match('/^\d{2}-\d{7}$/', $student_number)) {
-        $_SESSION['error'] = "Student Number must follow the format 'YY-XXXXXXX' (e.g., 22-0002155).";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
+    // Validate Student ID format: YY-XXXXXXX (e.g., 22-0002155)
+    if (!preg_match('/^\d{2}-\d{7}$/', $student_id)) {
+        $_SESSION['error'] = "Student ID must follow the format 'YY-XXXXXXX' (e.g., 22-0002155).";
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
@@ -133,7 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $conn->exec("ALTER TABLE students ADD COLUMN department VARCHAR(50) NULL AFTER email");
             }
         } catch (Exception $e) { /* ignore */ }
-        // Ensure students.student_id exists (legacy) and create students.student_number (VARCHAR) for dashed values
+        // Ensure students.student_id exists (main column for student identification)
         try {
             $colCheckSID = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students' AND COLUMN_NAME = 'student_id'");
             $colCheckSID->execute();
@@ -146,21 +146,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $dtype = strtolower((string)$dtypeStmt->fetchColumn());
                 if (in_array($dtype, ['int','integer','tinyint','smallint','mediumint','bigint','decimal','double','float'])) {
                     $conn->exec("ALTER TABLE students MODIFY COLUMN student_id VARCHAR(32) NULL");
-                }
-            }
-        } catch (Exception $e) { /* ignore */ }
-        // Ensure students.student_number exists (new canonical column)
-        try {
-            $colCheckSNum = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students' AND COLUMN_NAME = 'student_number'");
-            $colCheckSNum->execute();
-            if ((int)$colCheckSNum->fetchColumn() === 0) {
-                $conn->exec("ALTER TABLE students ADD COLUMN student_number VARCHAR(32) NULL AFTER student_id, ADD UNIQUE KEY uniq_student_number (student_number)");
-            } else {
-                $dtypeStmt2 = $conn->prepare("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students' AND COLUMN_NAME = 'student_number'");
-                $dtypeStmt2->execute();
-                $dtype2 = strtolower((string)$dtypeStmt2->fetchColumn());
-                if ($dtype2 !== 'varchar') {
-                    $conn->exec("ALTER TABLE students MODIFY COLUMN student_number VARCHAR(32) NULL");
                 }
             }
         } catch (Exception $e) { /* ignore */ }
@@ -218,19 +203,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         } catch (Exception $e) { /* ignore */ }
 
-        $stmt = $conn->prepare("SELECT * FROM students WHERE email = ? OR student_number = ?");
-        $stmt->execute([$email, $student_number]);
+        $stmt = $conn->prepare("SELECT * FROM students WHERE email = ? OR student_id = ?");
+        $stmt->execute([$email, $student_id]);
 
         if ($stmt->rowCount() > 0) {
-            $_SESSION['error'] = "Email or Student Number already exists.";
-            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
+            $_SESSION['error'] = "Email or Student ID already exists.";
+            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
             header("Location: register.php");
             exit();
         }
 
         if (!preg_match('/[A-Z]/', $password) || !preg_match('/\d/', $password) || !preg_match('/[\W]/', $password)) {
             $_SESSION['error'] = "Password must contain at least one uppercase letter, one number, and one special character.";
-            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
+            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
             header("Location: register.php");
             exit();
         }
@@ -261,14 +246,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$imageSaved) {
             $_SESSION['error'] = "Please provide a profile picture (upload or capture).";
-            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
+            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
             header("Location: register.php");
             exit();
         }
 
-        // Insert student (pending verification) using student_number; leave legacy student_id NULL to avoid conflicts
-        $stmt = $conn->prepare("INSERT INTO students (firstname, middlename, lastname, suffix, email, department, course_strand, student_id, student_number, password, profile_pic, is_verified) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)");
-        $stmt->execute([$firstname, $middlename, $lastname, $suffix, $email, $department, $course_strand, $student_number, $hashed_password, $profilePicName, 0]);
+        // Insert student (pending verification) using student_id
+        $stmt = $conn->prepare("INSERT INTO students (firstname, middlename, lastname, suffix, email, department, course_strand, student_id, password, profile_pic, is_verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->execute([$firstname, $middlename, $lastname, $suffix, $email, $department, $course_strand, $student_id, $hashed_password, $profilePicName, 0]);
 
         unset($_SESSION['old']);
         $_SESSION['success'] = "Registration successfully! Please wait for the Teacher to verify your account.";
@@ -276,7 +261,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit();
     } catch (PDOException $e) {
         $_SESSION['error'] = "Registration failed: " . $e->getMessage();
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_number, $department, $course_strand);
+        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
@@ -461,20 +446,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             </div>
 
-                 <!-- Student ID -->
-            <div class="relative">
-                <label for="lrn" class="block text-sm font-medium text-gray-700 mb-1">Student ID <span class="text-red-500">*</span></label>
-                <span class="absolute left-3 top-9 text-gray-400"><i class="fas fa-id-card"></i></span>
-                <input type="text" name="lrn" id="lrn" maxlength="10" pattern="^\d{2}-\d{7}$" inputmode="numeric" placeholder="YY-XXXXXXX" class="mt-1 block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required oninput="validateLRN(this)" value="<?php echo isset($old['lrn']) ? htmlspecialchars($old['lrn']) : ''; ?>">
-                <span id="lrn-error" class="text-xs text-red-600 mt-1 block"></span>
-            </div>
-
-
             <!-- Email -->
             <div class="relative">
                 <label for="email" class="block text-sm font-medium text-gray-700 mb-1">Email <span class="text-red-500">*</span></label>
                 <span class="absolute left-3 top-9 text-gray-400"><i class="fas fa-envelope"></i></span>
                 <input type="email" name="email" id="email" class="mt-1 block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required value="<?php echo isset($old['email']) ? htmlspecialchars($old['email']) : ''; ?>">
+            </div>
+
+            <!-- Department Selection -->
+            <div class="relative">
+                <label for="department" class="block text-sm font-medium text-gray-700 mb-1">Department <span class="text-red-500">*</span></label>
+                <select name="department" id="department" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required>
+                    <?php $oldDept = $old['department'] ?? ''; ?>
+                    <option value="" <?= empty($oldDept) ? 'selected' : '' ?>>Select Department</option>
+                    <option value="CCS" <?= ($oldDept==='CCS'?'selected':'') ?>>CCS (College of Computer Studies)</option>
+                    <option value="CBS" <?= ($oldDept==='CBS'?'selected':'') ?>>CBS (College of Business Studies)</option>
+                    <option value="COE" <?= ($oldDept==='COE'?'selected':'') ?>>COE (College of Education)</option>
+                    <option value="Senior High School" <?= ($oldDept==='Senior High School'?'selected':'') ?>>Senior High School</option>
+                </select>
+            </div>
+
+            <!-- Course/Strand Selection (Dynamic based on Department) -->
+            <div class="relative" id="course-strand-container" style="display: none;">
+                <label for="course_strand" class="block text-sm font-medium text-gray-700 mb-1">
+                    <span id="course-strand-label">Course/Strand</span> <span class="text-red-500">*</span>
+                </label>
+                <select name="course_strand" id="course_strand" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required>
+                    <option value="">Select Course/Strand</option>
+                </select>
+            </div>
+
+            <!-- Student ID / LRN NO. (Dynamic label based on department) -->
+            <div class="relative">
+                <label for="lrn" class="block text-sm font-medium text-gray-700 mb-1">
+                    <span id="student-id-label">Student ID</span> <span class="text-red-500">*</span>
+                </label>
+                <span class="absolute left-3 top-9 text-gray-400"><i class="fas fa-id-card"></i></span>
+                <input type="text" name="lrn" id="lrn" maxlength="10" pattern="^\d{2}-\d{7}$" inputmode="numeric" placeholder="YY-XXXXXXX" class="mt-1 block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required oninput="validateLRN(this)" value="<?php echo isset($old['student_id']) ? htmlspecialchars($old['student_id']) : ''; ?>">
+                <span id="lrn-error" class="text-xs text-red-600 mt-1 block"></span>
             </div>
            
             <!-- Password -->
@@ -506,35 +515,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             </div>
             <p id="confirm-password-match" class="text-xs text-center mt-1"></p>
-
-        
-
-            <!-- Department Selection -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                <div class="sm:col-span-2">
-                    <label for="department" class="block text-sm font-medium text-gray-700 mb-1">Department <span class="text-red-500">*</span></label>
-                    <select name="department" id="department" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required>
-                        <?php $oldDept = $old['department'] ?? ''; ?>
-                        <option value="" <?= empty($oldDept) ? 'selected' : '' ?>>Select Department</option>
-                        <option value="CCS" <?= ($oldDept==='CCS'?'selected':'') ?>>CCS (College of Computer Studies)</option>
-                        <option value="CBS" <?= ($oldDept==='CBS'?'selected':'') ?>>CBS (College of Business Studies)</option>
-                        <option value="COE" <?= ($oldDept==='COE'?'selected':'') ?>>COE (College of Education)</option>
-                        <option value="Senior High School" <?= ($oldDept==='Senior High School'?'selected':'') ?>>Senior High School</option>
-                    </select>
-                </div>
-            </div>
-
-            <!-- Course/Strand Selection (Dynamic based on Department) -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4" id="course-strand-container" style="display: none;">
-                <div class="sm:col-span-2">
-                    <label for="course_strand" class="block text-sm font-medium text-gray-700 mb-1">
-                        <span id="course-strand-label">Course/Strand</span> <span class="text-red-500">*</span>
-                    </label>
-                    <select name="course_strand" id="course_strand" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required>
-                        <option value="">Select Course/Strand</option>
-                    </select>
-                </div>
-            </div>
 
             
 
@@ -823,23 +803,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         const courseStrandContainer = document.getElementById('course-strand-container');
         const courseStrandSelect = document.getElementById('course_strand');
         const courseStrandLabel = document.getElementById('course-strand-label');
+        const studentIdLabel = document.getElementById('student-id-label');
 
         const courseStrandOptions = {
             'CCS': {
                 label: 'Course',
-                options: ['BSIS']
+                options: ['BSIS'],
+                studentIdLabel: 'Student ID'
             },
             'CBS': {
                 label: 'Course',
-                options: ['BSAIS', 'BSENTREP']
+                options: ['BSAIS', 'BSENTREP'],
+                studentIdLabel: 'Student ID'
             },
             'COE': {
                 label: 'Course',
-                options: ['BEED', 'BSED']
+                options: ['BEED', 'BSED'],
+                studentIdLabel: 'Student ID'
             },
             'Senior High School': {
                 label: 'Strand',
-                options: ['ABM', 'TVL', 'GAS', 'HUMSS', 'STEM']
+                options: ['ABM', 'TVL', 'GAS', 'HUMSS', 'STEM'],
+                studentIdLabel: 'LRN NO.'
             }
         };
 
@@ -849,6 +834,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (selectedDept && courseStrandOptions[selectedDept]) {
                 const config = courseStrandOptions[selectedDept];
                 courseStrandLabel.textContent = config.label;
+                
+                // Update Student ID label based on department
+                if (studentIdLabel) {
+                    studentIdLabel.textContent = config.studentIdLabel;
+                }
                 
                 // Clear existing options
                 courseStrandSelect.innerHTML = '<option value="">Select ' + config.label + '</option>';
@@ -874,6 +864,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 courseStrandContainer.style.display = 'none';
                 courseStrandSelect.required = false;
                 courseStrandSelect.innerHTML = '<option value="">Select Course/Strand</option>';
+                // Reset to default label
+                if (studentIdLabel) {
+                    studentIdLabel.textContent = 'Student ID';
+                }
             }
         }
 

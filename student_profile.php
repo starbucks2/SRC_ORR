@@ -15,18 +15,18 @@ $email = $_SESSION['email'] ?? 'Not Available';
 $profile_pic = isset($_SESSION['profile_pic']) ? 'images/' . $_SESSION['profile_pic'] : 'images/default.jpg';
 $department = $_SESSION['department'] ?? '';
 $course_strand = $_SESSION['course_strand'] ?? '';
-$student_number = $_SESSION['student_number'] ?? '';
+$student_id = $_SESSION['student_id'] ?? '';
 
 if (!file_exists($profile_pic) || empty($_SESSION['profile_pic'])) {
     $profile_pic = 'images/default.jpg';
 }
 
 // Fetch additional profile fields
-$stmt = $conn->prepare("SELECT student_number, course_strand FROM students WHERE student_id = ?");
+$stmt = $conn->prepare("SELECT student_id, course_strand FROM students WHERE student_id = ?");
 $stmt->execute([$student_id]);
 $user_data = $stmt->fetch();
 // Prefer DB values when available
-if (!empty($user_data['student_number'])) { $student_number = $user_data['student_number']; }
+if (!empty($user_data['student_id'])) { $student_id = $user_data['student_id']; }
 if (!empty($user_data['course_strand'])) { $course_strand = $user_data['course_strand']; }
 
 // Password change is always allowed (no 30-day restriction)
@@ -173,8 +173,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="bg-gray-50 p-4 rounded-lg">
                     <h3 class="font-semibold text-gray-700 mb-2">Academic Information</h3>
                     <div class="space-y-2 text-sm">
-                        <?php if (!empty($student_number)): ?>
-                        <div><span class="font-medium">Student Number:</span> <?php echo htmlspecialchars($student_number); ?></div>
+                        <?php if (!empty($student_id)): ?>
+                        <div><span class="font-medium">Student Number:</span> <?php echo htmlspecialchars($student_id); ?></div>
                         <?php endif; ?>
                         <div><span class="font-medium">Department:</span> <?php echo htmlspecialchars($department); ?></div>
                         <?php if (!empty($course_strand)): ?>

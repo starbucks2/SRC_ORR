@@ -162,7 +162,7 @@ try {
                                         ?>
                                         <img src="<?= $pic ?>" alt="Profile" class="w-10 h-10 rounded-full object-cover border" />
                                     </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['student_number'] ?? ''); ?></td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['student_id'] ?? ''); ?></td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['firstname']); ?></td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['lastname']); ?></td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['department'] ?? ''); ?></td>
@@ -200,7 +200,7 @@ try {
                                 </div>
                             </div>
                             <div class="mt-3 flex justify-end">
-                                <button type="button" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm" onclick="showProfileModal('<?= htmlspecialchars(addslashes($row['firstname']??'')) ?>','<?= htmlspecialchars(addslashes($row['lastname']??'')) ?>','<?= htmlspecialchars(addslashes($row['email']??'')) ?>','<?= htmlspecialchars(addslashes($row['student_number'] ?? '')) ?>','<?= htmlspecialchars(addslashes($row['department']??'')) ?>','<?= htmlspecialchars(addslashes($row['course_strand']??'')) ?>','<?= htmlspecialchars(addslashes($row['profile_pic']??'')) ?>')">
+                                <button type="button" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm" onclick="showProfileModal('<?= htmlspecialchars(addslashes($row['firstname']??'')) ?>','<?= htmlspecialchars(addslashes($row['lastname']??'')) ?>','<?= htmlspecialchars(addslashes($row['email']??'')) ?>','<?= htmlspecialchars(addslashes($row['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($row['department']??'')) ?>','<?= htmlspecialchars(addslashes($row['course_strand']??'')) ?>','<?= htmlspecialchars(addslashes($row['profile_pic']??'')) ?>')">
                                     <i class="fas fa-user mr-1"></i> View
                                 </button>
                             </div>

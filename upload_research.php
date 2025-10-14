@@ -31,14 +31,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $department = $_POST['department'] ?? ($_SESSION['department'] ?? '');
     // Course/Strand
     $course_strand = $_POST['course_strand'] ?? ($_SESSION['course_strand'] ?? '');
-    // Derive student_number and course_strand from the database for this student
-    $student_number = null;
+    // Derive student_id and course_strand from the database for this student
+    $student_id = null;
     try {
-        $gstmt = $conn->prepare("SELECT student_number, course_strand FROM students WHERE student_id = ?");
+        $gstmt = $conn->prepare("SELECT student_id, course_strand FROM students WHERE student_id = ?");
         $gstmt->execute([$student_id]);
         $grow = $gstmt->fetch(PDO::FETCH_ASSOC);
-        if ($grow && isset($grow['student_number'])) {
-            $student_number = (string)$grow['student_number'];
+        if ($grow && isset($grow['student_id'])) {
+            $student_id = (string)$grow['student_id'];
         }
         if ($grow && isset($grow['course_strand']) && empty($course_strand)) {
             $course_strand = (string)$grow['course_strand'];
@@ -195,11 +195,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         if ($chkDept->rowCount() == 0) {
             $conn->exec("ALTER TABLE research_submission ADD COLUMN department VARCHAR(100) NULL AFTER members");
         }
-        // Ensure student_number column exists for easier tracking
-        $chkStudNo = $conn->prepare("SHOW COLUMNS FROM research_submission LIKE 'student_number'");
+        // Ensure student_id column exists for easier tracking
+        $chkStudNo = $conn->prepare("SHOW COLUMNS FROM research_submission LIKE 'student_id'");
         $chkStudNo->execute();
         if ($chkStudNo->rowCount() == 0) {
-            $conn->exec("ALTER TABLE research_submission ADD COLUMN student_number VARCHAR(50) NULL AFTER student_id");
+            $conn->exec("ALTER TABLE research_submission ADD COLUMN student_id VARCHAR(50) NULL AFTER student_id");
         }
         // Ensure keywords column exists
         $chkKw = $conn->prepare("SHOW COLUMNS FROM research_submission LIKE 'keywords'");
@@ -226,15 +226,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     // --- Insert into Database ---
     try {
         $stmt = $conn->prepare("INSERT INTO research_submission 
-            (student_id, student_number, title, year, abstract, keywords, members, department, course_strand, document, image, status, submission_date) 
+            (student_id, student_id, title, year, abstract, keywords, members, department, course_strand, document, image, status, submission_date) 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
-        $stmt->execute([$student_id, $student_number, $title, $year, $abstract, $keywords, $members, $department, $course_strand, $document, $image, $status]);
+        $stmt->execute([$student_id, $student_id, $title, $year, $abstract, $keywords, $members, $department, $course_strand, $document, $image, $status]);
 
         // Activity log
         try {
             log_activity($conn, 'student', $_SESSION['student_id'] ?? null, 'upload_research', [
                 'title' => $title,
-                'student_number' => $student_number,
+                'student_id' => $student_id,
                 'department' => $department,
                 'course_strand' => $course_strand,
                 'year' => $year,
