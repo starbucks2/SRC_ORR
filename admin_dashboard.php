@@ -13,6 +13,7 @@ if (!isset($_SESSION['admin_id'])) {
 
 // Initialize variables
 $total_students = $verified_students = $unverified_students = 0;
+$total_subadmins = 0;
 $strand_counts = $research_stats = $year_data = $recent_research = $strand_research_data = [];
 $activity_logs = [];
 $unread_logs_count = 0;
@@ -26,6 +27,11 @@ try {
     $stmt = $conn->prepare("SELECT COUNT(*) as total FROM students");
     $stmt->execute();
     $total_students = $stmt->fetch()['total'];
+
+    // Total Active Sub-admins
+    $stmt = $conn->prepare("SELECT COUNT(*) as total FROM sub_admins WHERE COALESCE(is_archived,0) = 0");
+    $stmt->execute();
+    $total_subadmins = $stmt->fetch()['total'];
 
     
     $stmt = $conn->prepare("SELECT COUNT(*) as verified FROM students WHERE is_verified = 1");
@@ -271,6 +277,23 @@ try {
         </header>
     <!-- Analytics Cards -->
 <div class="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 md:mb-8">
+
+<!-- Total Sub-admins -->
+<div class="bg-white rounded-xl p-4 sm:p-6 text-center shadow-md h-full 
+        hover:shadow-lg transition-shadow duration-300 ease-in-out 
+        outline-none focus:outline-none focus:ring-0 
+        active:shadow-md active:transform-none"
+    tabindex="-1">
+    <div class="flex items-center justify-between">
+        <div>
+            <p class="text-sm font-medium text-gray-500 uppercase tracking-wide">Sub-admins</p>
+            <p class="text-3xl font-bold text-indigo-600 mt-1"><?= number_format($total_subadmins) ?></p>
+        </div>
+        <div class="text-indigo-500 text-4xl">
+            <i class="fas fa-user-shield"></i>
+        </div>
+    </div>
+</div>
 
 <!-- Total Students -->
 <div class="bg-white rounded-xl p-4 sm:p-6 text-center shadow-md h-full 
