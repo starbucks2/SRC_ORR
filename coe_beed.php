@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>COE - Bachelor of Elementary Education</title>
+  <title>COE - Bachelor of Elementary Education (Major in General Education)</title>
   <link rel="icon" type="image/png" href="srclogo.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
@@ -26,11 +26,13 @@
       <div class="max-w-3xl" data-aos="fade-up">
         <p class="uppercase tracking-wider text-blue-200 text-sm mb-2">Undergraduate Program</p>
         <h1 class="text-3xl sm:text-4xl md:text-5xl font-extrabold leading-tight mb-4">Bachelor of Elementary Education (BEEd)</h1>
+        <p class="text-xl sm:text-2xl font-semibold text-blue-300 mt-2">Major in General Education</p>
         <p class="text-base sm:text-lg text-blue-100 max-w-2xl">Prepares future elementary teachers with strong foundations in pedagogy, child development, assessment, and curriculum design.</p>
         <div class="mt-6 flex flex-wrap gap-2">
           <span class="chip"><i class="fa-solid fa-chalkboard-user"></i>Teaching</span>
           <span class="chip"><i class="fa-solid fa-children"></i>Child Dev</span>
           <span class="chip"><i class="fa-solid fa-book-open"></i>Curriculum</span>
+          <span class="chip"><i class="fa-solid fa-globe"></i>General Ed</span>
         </div>
       </div>
     </div>
@@ -41,7 +43,7 @@
       <div class="lg:col-span-2" data-aos="fade-up">
         <div class="bg-white rounded-2xl shadow-xl border border-gray-100 p-6 sm:p-8">
           <h2 class="text-2xl font-bold text-gray-900 mb-4">Program Overview</h2>
-          <p class="text-gray-700 leading-relaxed">The BEEd program equips students with the knowledge, skills, and values necessary to become effective and compassionate elementary educators, capable of teaching diverse learners in a rapidly changing educational landscape.</p>
+          <p class="text-gray-700 leading-relaxed">The BEEd program with a major in General Education equips students with the knowledge, skills, and values necessary to become effective and compassionate elementary educators, capable of teaching diverse learners in a rapidly changing educational landscape. This major provides a comprehensive foundation across all elementary subjects.</p>
           <div class="mt-6 grid sm:grid-cols-2 gap-4">
             <div class="p-4 rounded-xl bg-blue-50 border border-blue-100">
               <p class="font-semibold text-blue-900"><i class="fa-solid fa-clock mr-2"></i>Duration</p>
@@ -49,7 +51,7 @@
             </div>
             <div class="p-4 rounded-xl bg-green-50 border border-green-100">
               <p class="font-semibold text-green-900"><i class="fa-solid fa-graduation-cap mr-2"></i>Degree</p>
-              <p class="text-green-800 text-sm">Bachelor of Elementary Education</p>
+              <p class="text-green-800 text-sm">Bachelor of Elementary Education<br><span class="text-xs">(Major in General Education)</span></p>
             </div>
           </div>
         </div>

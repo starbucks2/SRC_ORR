@@ -48,7 +48,7 @@
                         <li>
                             <span class="block text-white font-semibold">COE</span>
                             <ul class="ml-4 list-disc space-y-1 text-gray-300">
-                                <li><a href="coe_beed.php" class="hover:text-white transition-colors duration-200">Bachelor of Elementary Education</a></li>
+                                <li><a href="coe_beed.php" class="hover:text-white transition-colors duration-200">Bachelor of Elementary Education (Major in General Education)</a></li>
                                 <li><a href="coe_bsed_english.php" class="hover:text-white transition-colors duration-200">Bachelor of Secondary Education (Major in English)</a></li>
                             </ul>
                         </li>
