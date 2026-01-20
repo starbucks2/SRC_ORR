@@ -35,7 +35,7 @@ $view_allowed = $is_admin || in_array('view_students', $permissions) || in_array
 <aside id="admin-sidebar" class="flex-none w-72 min-w-[18rem] bg-gradient-to-b from-blue-900 to-blue-800 text-white min-h-screen p-6 shadow-xl fixed inset-y-0 left-0 z-40 transform -translate-x-full lg:relative lg:translate-x-0 transition-transform duration-300 ease-in-out overflow-y-auto max-h-screen">
     <div class="text-center mb-8">
         <img src="srclogo.png" alt="School Logo" class="h-20 w-auto mx-auto rounded-full border-2 border-yellow-300">
-        <h2 class="mt-4 text-2xl font-bold">Admin Panel</h2>
+        <h2 class="mt-4 text-2xl font-bold">Dean Panel</h2>
         <button id="close-admin-sidebar-btn" class="lg:hidden text-white hover:text-yellow-300 absolute top-6 right-6">
             <i class="fas fa-times text-2xl"></i>
         </button>
@@ -87,9 +87,13 @@ $view_allowed = $is_admin || in_array('view_students', $permissions) || in_array
             ?>
         </a></li>
         <?php endif; ?>
-        <li><a href="manage_subadmins.php" class="<?= $base_link_cls . (___is_active($___current, 'manage_subadmins.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-users-cog mr-3"></i> Manage Sub-Admins</a></li>
+        <li><a href="manage_subadmins.php" class="<?= $base_link_cls . (___is_active($___current, 'manage_subadmins.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-users-cog mr-3"></i> Manage Research Adviser</a></li>
         <?php if ($is_admin): ?>
-        <li><a href="archived_subadmins.php" class="<?= $base_link_cls . (___is_active($___current, 'archived_subadmins.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-archive mr-3"></i> Archived Sub-Admins</a></li>
+        <li><a href="archived_subadmins.php" class="<?= $base_link_cls . (___is_active($___current, 'archived_subadmins.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-archive mr-3"></i> Archived Research Adviser</a></li>
+        <li><a href="manage_departments.php" class="<?= $base_link_cls . (___is_active($___current, 'manage_departments.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-building mr-3"></i> Manage Departments</a></li>
+        <li><a href="manage_courses.php" class="<?= $base_link_cls . (___is_active($___current, 'manage_courses.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-graduation-cap mr-3"></i> Manage Courses</a></li>
+        <li><a href="manage_academic_years.php" class="<?= $base_link_cls . (___is_active($___current, 'manage_academic_years.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-calendar-alt mr-3"></i> Manage Academic/School Year</a></li>
+        <li><a href="update_strands.php" class="<?= $base_link_cls . (___is_active($___current, 'update_strands.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-layer-group mr-3"></i> Manage Strands (SHS)</a></li>
         <?php endif; ?>
         <li><a href="repository.php?department=CCS" class="<?= $base_link_cls . (___is_active($___current, 'repository.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-database mr-3"></i> Research Repository</a></li>
     <?php if ($view_allowed): ?>

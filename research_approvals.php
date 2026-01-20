@@ -33,33 +33,14 @@ if (isset($_POST['approve'])) {
     if (!$can_approve_research) {
         $_SESSION['error'] = "You don't have permission to approve research.";
     } else {
-        $research_id = $_POST['research_id'];
-        // Ensure required columns exist (department). is_archived optional.
-        try {
-            $chkDept = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'research_submission' AND COLUMN_NAME = 'department'");
-            $chkDept->execute();
-            if ((int)$chkDept->fetchColumn() === 0) {
-                $conn->exec("ALTER TABLE research_submission ADD COLUMN department VARCHAR(100) NULL AFTER members");
-            }
-            // Optional: attempt to add is_archived if desired, but not required
-            try {
-                $chkArch = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'research_submission' AND COLUMN_NAME = 'is_archived'");
-                $chkArch->execute();
-                if ((int)$chkArch->fetchColumn() === 0) {
-                    $conn->exec("ALTER TABLE research_submission ADD COLUMN is_archived TINYINT(1) NOT NULL DEFAULT 0 AFTER status");
-                }
-            } catch (Throwable $e2) { /* ignore */ }
-        } catch (Throwable $e) { /* ignore guard failures */ }
-
-        // Approve and backfill department from student if missing; un-archive if necessary
-        $approve_stmt = $conn->prepare("UPDATE research_submission rs 
-            LEFT JOIN students s ON rs.student_id = s.student_id 
-            SET rs.status = 1,
-                rs.department = COALESCE(NULLIF(rs.department, ''), s.department)
-            WHERE rs.id = ?");
+        $research_id = (int)$_POST['research_id'];
+        // Approve and backfill department from student if missing
+        $approve_stmt = $conn->prepare("UPDATE books b 
+            LEFT JOIN students s ON b.student_id = s.student_id 
+            SET b.status = 1,
+                b.department = COALESCE(NULLIF(b.department, ''), s.department)
+            WHERE b.book_id = ?");
         if ($approve_stmt->execute([$research_id])) {
-            // Best-effort unarchive flag if column exists
-            try { $conn->exec("UPDATE research_submission SET is_archived = 0 WHERE id = " . $conn->quote($research_id)); } catch (Throwable $e) { /* ignore */ }
             $_SESSION['success'] = "Research approved successfully.";
         } else {
             $_SESSION['error'] = "Failed to approve research.";
@@ -73,13 +54,12 @@ if (isset($_POST['approve'])) {
 if (isset($_POST['archive'])) {
     // For this page, we assume anyone who can see it can archive pending items.
     // You could tie this to a specific permission like `$can_archive_research` if needed.
-    $research_id = $_POST['research_id'];
+    $research_id = (int)$_POST['research_id'];
     // Prefer status-based archive (2 = Archived)
     $ok = false;
     try {
-        $archive_stmt = $conn->prepare("UPDATE research_submission SET status = 2 WHERE id = ?");
+        $archive_stmt = $conn->prepare("UPDATE books SET status = 2 WHERE book_id = ?");
         $ok = $archive_stmt->execute([$research_id]);
-        try { $conn->exec("UPDATE research_submission SET is_archived = 1 WHERE id = " . $conn->quote($research_id)); } catch (Throwable $e) { /* ignore */ }
     } catch (Throwable $e) { $ok = false; }
     if ($ok) {
         $_SESSION['success'] = "Research has been archived and removed from this list.";

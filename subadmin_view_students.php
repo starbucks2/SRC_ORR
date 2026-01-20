@@ -39,7 +39,24 @@ if ($is_admin) {
     $fetched_strand = null;
     // If session strand is empty, try to fetch it from DB using subadmin_id
     if (isset($_SESSION['subadmin_id'])) {
-        try {
+        // Normalize $permissions to always be an array (avoid implode errors)
+if (!is_array($permissions)) {
+    $permRaw = $_SESSION['permissions'] ?? '';
+    if (is_string($permRaw)) {
+        $tryJson = json_decode($permRaw, true);
+        if (is_array($tryJson)) {
+            $permissions = $tryJson;
+        } else {
+            // Fallback: comma-separated string -> array
+            $parts = array_filter(array_map('trim', explode(',', $permRaw)), function($x){ return $x !== '' && $x !== null; });
+            $permissions = $parts ?: [];
+        }
+    } else {
+        $permissions = [];
+    }
+}
+
+try {
             // Read department (fallback legacy strand)
             $stmt = $conn->prepare("SELECT id, COALESCE(department, strand) AS strand FROM sub_admins WHERE id = ? LIMIT 1");
             $stmt->execute([$_SESSION['subadmin_id']]);
@@ -71,11 +88,29 @@ if (!$can_view) {
 }
 
 try {
+    // Detect which name columns exist in students
+    $cols = [];
+    try {
+        $qCols = $conn->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students'");
+        $qCols->execute();
+        $cols = $qCols->fetchAll(PDO::FETCH_COLUMN, 0);
+    } catch (Throwable $_) { $cols = []; }
+    $firstCol = in_array('firstname', $cols, true) ? 'firstname' : (in_array('first_name', $cols, true) ? 'first_name' : null);
+    $lastCol  = in_array('lastname',  $cols, true) ? 'lastname'  : (in_array('last_name',  $cols, true) ? 'last_name'  : null);
+    $orderByName = 'email';
+    if ($lastCol && $firstCol) {
+        $orderByName = "`$lastCol`, `$firstCol`";
+    } elseif ($lastCol) {
+        $orderByName = "`$lastCol`";
+    } elseif ($firstCol) {
+        $orderByName = "`$firstCol`";
+    }
+
     // Prepare and execute pending and verified queries based on actual account type
     if ($is_admin) {
         // Admin: global view, no grade restriction
-        $pendingStmt = $conn->prepare("SELECT * FROM students WHERE is_verified = 0 ORDER BY lastname, firstname");
-        $verifiedStmt = $conn->prepare("SELECT * FROM students WHERE is_verified = 1 ORDER BY lastname, firstname");
+        $pendingStmt = $conn->prepare("SELECT * FROM students WHERE is_verified = 0 ORDER BY $orderByName");
+        $verifiedStmt = $conn->prepare("SELECT * FROM students WHERE is_verified = 1 ORDER BY $orderByName");
         $pendingStmt->execute();
         $verifiedStmt->execute();
 
@@ -89,13 +124,13 @@ try {
             $params = [$deptKey];
             
             // Get pending students
-            $sqlPending = "SELECT * FROM students WHERE is_verified = 0 AND $whereDept ORDER BY lastname, firstname";
+            $sqlPending = "SELECT * FROM students WHERE is_verified = 0 AND $whereDept ORDER BY $orderByName";
             $pendingStmt = $conn->prepare($sqlPending);
             $pendingStmt->execute($params);
             $pendingStudents = $pendingStmt->fetchAll(PDO::FETCH_ASSOC);
             
             // Get verified students
-            $sqlVerified = "SELECT * FROM students WHERE is_verified = 1 AND $whereDept ORDER BY lastname, firstname";
+            $sqlVerified = "SELECT * FROM students WHERE is_verified = 1 AND $whereDept ORDER BY $orderByName";
             $verifiedStmt = $conn->prepare($sqlVerified);
             $verifiedStmt->execute($params);
             $verifiedStudents = $verifiedStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -109,7 +144,9 @@ try {
             
             // Log each verified student for debugging
             foreach ($verifiedStudents as $student) {
-                error_log("Verified student found: " . $student['firstname'] . " " . $student['lastname'] . 
+                $fname = $firstCol ? ($student[$firstCol] ?? '') : '';
+                $lname = $lastCol ? ($student[$lastCol] ?? '') : '';
+                error_log("Verified student found: " . $fname . " " . $lname . 
                          " - Department: " . ($student['department'] ?? $student['strand']) . 
                          " - Status: " . $student['is_verified']);
             }
@@ -153,7 +190,7 @@ try {
     $debugInfo .= "<p><strong>Assigned Department:</strong> " . htmlspecialchars($assigned_strand) . "</p>";
     $debugInfo .= "<p><strong>Session Department:</strong> " . htmlspecialchars($_SESSION['department'] ?? 'not set') . "</p>";
     $debugInfo .= "<p><strong>Fetched DB Department:</strong> " . htmlspecialchars($fetched_strand ?? 'not set') . "</p>";
-    $debugInfo .= "<p><strong>Permissions:</strong> " . htmlspecialchars(implode(", ", $permissions)) . "</p>";
+    $debugInfo .= "<p><strong>Permissions:</strong> " . htmlspecialchars(implode(", ", (array)$permissions)) . "</p>";
     $debugInfo .= "</div>";
 
     $queryInfo .= "<div class='bg-blue-100 p-4 mb-4 rounded'>";
@@ -252,14 +289,15 @@ try {
                     <tbody class="divide-y divide-gray-200">
                         <?php if (!empty($verifiedStudents)): ?>
                             <?php foreach ($verifiedStudents as $row): ?>
-                                <tr class="hover:bg-gray-50" data-name="<?= htmlspecialchars(strtolower(($row['firstname']??'').' '.($row['lastname']??''))) ?>" data-email="<?= htmlspecialchars(strtolower($row['email'] ?? '')) ?>" data-studnum="<?= htmlspecialchars(strtolower($row['student_id'] ?? '')) ?>" data-department="<?= htmlspecialchars(strtolower($row['department'] ?? ($row['strand'] ?? ''))) ?>">
+                                <?php $fname = $firstCol ? ($row[$firstCol] ?? '') : ''; $lname = $lastCol ? ($row[$lastCol] ?? '') : ''; ?>
+                                <tr class="hover:bg-gray-50" data-name="<?= htmlspecialchars(strtolower($fname.' '.$lname)) ?>" data-email="<?= htmlspecialchars(strtolower($row['email'] ?? '')) ?>" data-studnum="<?= htmlspecialchars(strtolower($row['student_id'] ?? '')) ?>" data-department="<?= htmlspecialchars(strtolower($row['department'] ?? ($row['strand'] ?? ''))) ?>">
                                     <td class="px-6 py-4 whitespace-nowrap">
                                         <?php $pic = !empty($row['profile_pic']) ? 'images/' . htmlspecialchars($row['profile_pic']) : 'images/default.jpg'; ?>
                                         <img src="<?= $pic ?>" alt="Profile" class="w-10 h-10 rounded-full object-cover border" />
                                     </td>
                                     <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($row['student_id'] ?? 'N/A'); ?></td>
-                                    <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($row['firstname'] ?? 'N/A'); ?></td>
-                                    <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($row['lastname'] ?? 'N/A'); ?></td>
+                                    <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($fname); ?></td>
+                                    <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($lname); ?></td>
                                     <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($row['email'] ?? 'N/A'); ?></td>
                                     <td class="px-6 py-4 text-sm text-gray-700"><?php echo htmlspecialchars($row['department'] ?? ($row['strand'] ?? 'Not Set')); ?></td>
                                     <td class="px-6 py-4 text-sm text-gray-700">
@@ -283,11 +321,12 @@ try {
                 <?php if (!empty($verifiedStudents)): ?>
                     <?php foreach ($verifiedStudents as $row): ?>
                         <?php $pic = !empty($row['profile_pic']) ? 'images/' . htmlspecialchars($row['profile_pic']) : 'images/default.jpg'; ?>
-                        <div class="bg-white rounded-lg shadow p-4" data-name="<?= htmlspecialchars(strtolower(($row['firstname']??'').' '.($row['lastname']??''))) ?>" data-email="<?= htmlspecialchars(strtolower($row['email'] ?? '')) ?>" data-studnum="<?= htmlspecialchars(strtolower($row['student_id'] ?? '')) ?>" data-department="<?= htmlspecialchars(strtolower($row['department'] ?? ($row['strand'] ?? ''))) ?>">
+                        <?php $fname = $firstCol ? ($row[$firstCol] ?? '') : ''; $lname = $lastCol ? ($row[$lastCol] ?? '') : ''; ?>
+                        <div class="bg-white rounded-lg shadow p-4" data-name="<?= htmlspecialchars(strtolower($fname.' '.$lname)) ?>" data-email="<?= htmlspecialchars(strtolower($row['email'] ?? '')) ?>" data-studnum="<?= htmlspecialchars(strtolower($row['student_id'] ?? '')) ?>" data-department="<?= htmlspecialchars(strtolower($row['department'] ?? ($row['strand'] ?? ''))) ?>">
                             <div class="flex items-start gap-3">
                                 <img src="<?= $pic ?>" alt="Profile" class="w-12 h-12 rounded-full object-cover border">
                                 <div class="min-w-0">
-                                    <h4 class="text-base font-semibold text-gray-900 truncate"><?= htmlspecialchars(($row['firstname']??'').' '.($row['lastname']??'')) ?></h4>
+                                    <h4 class="text-base font-semibold text-gray-900 truncate"><?= htmlspecialchars($fname.' '.$lname) ?></h4>
                                     <p class="text-xs text-gray-500">Student Number: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['student_id'] ?? 'N/A') ?></span></p>
                                     <p class="text-xs text-gray-500">Email: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['email'] ?? 'N/A') ?></span></p>
                                     <p class="text-xs text-gray-500">Department: <span class="font-medium text-gray-700"><?= htmlspecialchars($row['department'] ?? ($row['strand'] ?? 'Not Set')) ?></span></p>
@@ -299,7 +338,7 @@ try {
                                 <?php else: ?>
                                     <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">Pending</span>
                                 <?php endif; ?>
-                                <button type="button" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm" onclick="showProfileModal('<?= htmlspecialchars(addslashes($row['firstname']??'')) ?>','<?= htmlspecialchars(addslashes($row['lastname']??'')) ?>','<?= htmlspecialchars(addslashes($row['email']??'')) ?>','<?= htmlspecialchars(addslashes($row['student_id']??'')) ?>','<?= htmlspecialchars(addslashes($row['grade'] ?? '')) ?>','<?= htmlspecialchars(addslashes($row['department'] ?? ($row['strand']??''))) ?>','','','<?= htmlspecialchars(addslashes($row['profile_pic']??'')) ?>')">
+                                <button type="button" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm" onclick="showProfileModal('<?= htmlspecialchars(addslashes($fname)) ?>','<?= htmlspecialchars(addslashes($lname)) ?>','<?= htmlspecialchars(addslashes($row['email']??'')) ?>','<?= htmlspecialchars(addslashes($row['student_id']??'')) ?>','<?= htmlspecialchars(addslashes($row['grade'] ?? '')) ?>','<?= htmlspecialchars(addslashes($row['department'] ?? ($row['strand']??''))) ?>','','','<?= htmlspecialchars(addslashes($row['profile_pic']??'')) ?>')">
                                     <i class="fas fa-user mr-1"></i> View
                                 </button>
                             </div>

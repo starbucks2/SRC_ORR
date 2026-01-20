@@ -25,6 +25,27 @@ if (!$can_verify_students && isset($_SESSION['subadmin_id'])) {
     }
 }
 
+// Bulk Approve All within scope (admins: all; sub-admins: only their department)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['approve_all']) && $can_verify_students) {
+    try {
+        if (isset($_SESSION['admin_id'])) {
+            $stmtApprove = $conn->prepare("UPDATE students SET is_verified = 1 WHERE is_verified = 0");
+            $stmtApprove->execute();
+        } else {
+            $stmtApprove = $conn->prepare("UPDATE students SET is_verified = 1 WHERE is_verified = 0 AND LOWER(department) = LOWER(?)");
+            $stmtApprove->execute([$strand]);
+        }
+        $affected = $stmtApprove->rowCount();
+        $_SESSION['success'] = ($affected > 0)
+            ? ("Approved " . $affected . " student" . ($affected==1?'':'s') . ".")
+            : "No students to approve.";
+    } catch (PDOException $e) {
+        $_SESSION['error'] = "Bulk approve failed: " . $e->getMessage();
+    }
+    header("Location: verify_students.php");
+    exit();
+}
+
 // Fetch unverified students
 try {
     if (isset($_SESSION['admin_id'])) {
@@ -82,6 +103,16 @@ foreach ($unverified_students as $s) {
                 </select>
             </div>
         </header>
+        <?php if ($can_verify_students): ?>
+        <div class="mb-4 flex justify-end">
+            <form id="approveAllForm" method="POST" action="verify_students.php">
+                <input type="hidden" name="approve_all" value="1">
+                <button type="button" id="approveAllBtn" class="inline-flex items-center bg-green-700 hover:bg-green-800 text-white px-4 py-2 rounded font-semibold shadow">
+                    <i class="fas fa-check-double mr-2"></i> Approve All
+                </button>
+            </form>
+        </div>
+        <?php endif; ?>
 
         <!-- Info Message for Sub-Admins without Permission -->
         <?php if (isset($_SESSION['subadmin_id']) && !$can_verify_students): ?>
@@ -136,10 +167,14 @@ foreach ($unverified_students as $s) {
                     <tbody class="bg-white divide-y divide-gray-200">
                         <?php if (count($unverified_students) > 0): ?>
                             <?php foreach ($unverified_students as $student): ?>
-                                <tr class="hover:bg-gray-50 transition duration-150" data-name="<?= htmlspecialchars(strtolower($student['firstname'].' '.$student['lastname'])) ?>" data-email="<?= htmlspecialchars(strtolower($student['email'])) ?>" data-lrn="<?= htmlspecialchars(strtolower($student['student_id'] ?? '')) ?>" data-strand="<?= htmlspecialchars(strtolower($student['department'])) ?>">
+                                <?php 
+                                    $sfname = $student['firstname'] ?? $student['first_name'] ?? '';
+                                    $slname = $student['lastname'] ?? $student['last_name'] ?? '';
+                                ?>
+                                <tr class="hover:bg-gray-50 transition duration-150" data-name="<?= htmlspecialchars(strtolower($sfname.' '.$slname)) ?>" data-email="<?= htmlspecialchars(strtolower($student['email'] ?? '')) ?>" data-lrn="<?= htmlspecialchars(strtolower($student['student_id'] ?? '')) ?>" data-strand="<?= htmlspecialchars(strtolower($student['department'] ?? '')) ?>">
                                     <td class="border border-gray-300 px-4 py-3">
                                         <div class="font-medium text-gray-900">
-                                            <?= htmlspecialchars($student['firstname'] . ' ' . $student['lastname']); ?>
+                                            <?= htmlspecialchars($sfname . ' ' . $slname); ?>
                                         </div>
                                     </td>
                                     <td class="border border-gray-300 px-4 py-3 text-gray-700">
@@ -156,7 +191,7 @@ foreach ($unverified_students as $s) {
                                     </td>
                                     <td class="border border-gray-300 px-4 py-3">
                                         <div class="flex flex-wrap gap-2">
-                                            <button type="button" onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'])) ?>','<?= htmlspecialchars(addslashes($student['course_strand'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>')" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded font-semibold shadow transition duration-200">
+                                            <button type="button" onclick="showProfileModal('<?= htmlspecialchars(addslashes($sfname)) ?>','<?= htmlspecialchars(addslashes($slname)) ?>','<?= htmlspecialchars(addslashes($student['email'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['course_strand'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'] ?? '')) ?>')" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded font-semibold shadow transition duration-200">
                                                 <i class="fas fa-user mr-2"></i> View Profile
                                             </button>
                                             <form action="approve_student.php" method="POST" class="inline">
@@ -194,11 +229,15 @@ foreach ($unverified_students as $s) {
             <div class="xl:hidden grid grid-cols-1 gap-3 p-4">
                 <?php if (count($unverified_students) > 0): ?>
                     <?php foreach ($unverified_students as $student): ?>
-                        <div class="bg-white rounded-lg shadow p-4" data-name="<?= htmlspecialchars(strtolower($student['firstname'].' '.$student['lastname'])) ?>" data-email="<?= htmlspecialchars(strtolower($student['email'])) ?>" data-lrn="<?= htmlspecialchars(strtolower($student['student_id'] ?? '')) ?>" data-strand="<?= htmlspecialchars(strtolower($student['department'])) ?>">
+                        <?php 
+                            $sfname = $student['firstname'] ?? $student['first_name'] ?? '';
+                            $slname = $student['lastname'] ?? $student['last_name'] ?? '';
+                        ?>
+                        <div class="bg-white rounded-lg shadow p-4" data-name="<?= htmlspecialchars(strtolower($sfname.' '.$slname)) ?>" data-email="<?= htmlspecialchars(strtolower($student['email'] ?? '')) ?>" data-lrn="<?= htmlspecialchars(strtolower($student['student_id'] ?? '')) ?>" data-strand="<?= htmlspecialchars(strtolower($student['department'] ?? '')) ?>">
                             <div class="flex items-start justify-between gap-3">
                                 <div class="min-w-0">
                                     <h3 class="text-base font-semibold text-gray-900">
-                                        <?= htmlspecialchars($student['firstname'] . ' ' . $student['lastname']); ?>
+                                        <?= htmlspecialchars($sfname . ' ' . $slname); ?>
                                     </h3>
                                     <p class="text-xs text-gray-500">Email: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['email']); ?></span></p>
                                     <p class="text-xs text-gray-500">Student ID: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['student_id'] ?? ''); ?></span></p>
@@ -206,7 +245,7 @@ foreach ($unverified_students as $s) {
                                     <p class="text-xs text-gray-500"><?= ($student['department'] === 'Senior High School') ? 'Strand:' : 'Course:'; ?> <span class="font-medium text-gray-700"><?= htmlspecialchars($student['course_strand'] ?? 'N/A'); ?></span></p>
                                 </div>
                                 <div class="shrink-0">
-                                    <button type="button" onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'])) ?>','<?= htmlspecialchars(addslashes($student['course_strand'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>')" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm">
+                                    <button type="button" onclick="showProfileModal('<?= htmlspecialchars(addslashes($sfname)) ?>','<?= htmlspecialchars(addslashes($slname)) ?>','<?= htmlspecialchars(addslashes($student['email'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['course_strand'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'] ?? '')) ?>')" class="inline-flex items-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm">
                                         <i class="fas fa-user mr-1"></i> View
                                     </button>
                                 </div>
@@ -300,6 +339,24 @@ foreach ($unverified_students as $s) {
             });
         });
 
+        // Approve All confirmation
+        (function(){
+            const btn = document.getElementById('approveAllBtn');
+            const form = document.getElementById('approveAllForm');
+            if (!btn || !form) return;
+            btn.addEventListener('click', function(ev){
+                ev.preventDefault();
+                Swal.fire({
+                    title: 'Approve all students?',
+                    text: 'This will verify all unverified students' + (<?= isset($_SESSION['admin_id']) ? '""' : '" in your department"' ?>) + '.',
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonText: 'Yes, approve all',
+                    cancelButtonText: 'Cancel',
+                    reverseButtons: true
+                }).then((res)=>{ if (res.isConfirmed) form.submit(); });
+            });
+        })();
         // Client-side filtering for table rows and cards
         (function(){
             const q = document.getElementById('vsSearch');

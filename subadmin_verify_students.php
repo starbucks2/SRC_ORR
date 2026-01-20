@@ -9,21 +9,34 @@ if (!isset($_SESSION['admin_id']) && !isset($_SESSION['subadmin_id'])) {
     exit();
 }
 
-// Get subadmin's department and profile pic if they are a subadmin (needed for permission evaluation)
+// Get subadmin's department and profile pic from employees (unified table)
 $subadmin_department = '';
 $subadmin_profile_pic = '';
+// Detect role columns in employees
+try {
+    $c1 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'role'");
+    $c1->execute();
+    $hasRoleColEmp = ((int)$c1->fetchColumn() > 0);
+} catch (Throwable $_) { $hasRoleColEmp = false; }
+try {
+    $c2 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'employee_type'");
+    $c2->execute();
+    $hasEmpTypeColEmp = ((int)$c2->fetchColumn() > 0);
+} catch (Throwable $_) { $hasEmpTypeColEmp = false; }
+$wanted = "('RESEARCH_ADVISER','FACULTY')";
+$roleWhereEmp = $hasRoleColEmp && $hasEmpTypeColEmp
+    ? "(UPPER(REPLACE(TRIM(role),' ','_')) IN $wanted OR UPPER(REPLACE(TRIM(employee_type),' ','_')) IN $wanted)"
+    : ($hasRoleColEmp
+        ? "UPPER(REPLACE(TRIM(role),' ','_')) IN $wanted"
+        : ($hasEmpTypeColEmp ? "UPPER(REPLACE(TRIM(employee_type),' ','_')) IN $wanted" : '1=0'));
 if (isset($_SESSION['subadmin_id'])) {
     try {
-        $stmtDept = $conn->prepare("SELECT department, profile_pic FROM sub_admins WHERE id = ?");
+        $stmtDept = $conn->prepare("SELECT department, profile_pic FROM employees WHERE employee_id = ? AND $roleWhereEmp LIMIT 1");
         $stmtDept->execute([$_SESSION['subadmin_id']]);
         $result = $stmtDept->fetch(PDO::FETCH_ASSOC);
         $subadmin_department = $result['department'] ?? '';
         $subadmin_profile_pic = $result['profile_pic'] ?? '';
-        
-        // Update session with fresh profile pic
-        if ($subadmin_profile_pic) {
-            $_SESSION['subadmin_profile_pic'] = $subadmin_profile_pic;
-        }
+        if ($subadmin_profile_pic) { $_SESSION['subadmin_profile_pic'] = $subadmin_profile_pic; }
     } catch (PDOException $e) {
         $_SESSION['error'] = "Error fetching subadmin department: " . $e->getMessage();
     }
@@ -42,13 +55,21 @@ if (isset($_SESSION['subadmin_id'])) {
 
 // Fetch unverified students based on user role
 try {
+    // Detect created_at existence on students
+    $hasCreatedAt = false;
+    try {
+        $c3 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students' AND COLUMN_NAME = 'created_at'");
+        $c3->execute();
+        $hasCreatedAt = ((int)$c3->fetchColumn() > 0);
+    } catch (Throwable $_) { $hasCreatedAt = false; }
+    $orderBy = $hasCreatedAt ? 'created_at DESC' : 'student_id DESC';
     if (isset($_SESSION['subadmin_id']) && !empty($subadmin_department)) {
         // For subadmin, only show students from their department
-        $stmt = $conn->prepare("SELECT * FROM students WHERE is_verified = 0 AND TRIM(LOWER(COALESCE(department,''))) = TRIM(LOWER(?)) ORDER BY created_at DESC");
+        $stmt = $conn->prepare("SELECT * FROM students WHERE is_verified = 0 AND TRIM(LOWER(COALESCE(department,''))) = TRIM(LOWER(?)) ORDER BY $orderBy");
         $stmt->execute([$subadmin_department]);
     } else {
         // For admin, show all unverified students
-        $stmt = $conn->prepare("SELECT * FROM students WHERE is_verified = 0 ORDER BY created_at DESC");
+        $stmt = $conn->prepare("SELECT * FROM students WHERE is_verified = 0 ORDER BY $orderBy");
         $stmt->execute();
     }
     $unverified_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -173,7 +194,11 @@ try {
                                     </td>
                                     <td class="border border-gray-300 dark:border-gray-600 px-4 py-3">
                                         <div class="font-medium text-gray-900 dark:text-white">
-                                            <?= htmlspecialchars($student['firstname'] . ' ' . $student['lastname']); ?>
+                                            <?php 
+                                                $sf = $student['firstname'] ?? ($student['first_name'] ?? '');
+                                                $sl = $student['lastname']  ?? ($student['last_name']  ?? '');
+                                            ?>
+                                            <?= htmlspecialchars(trim($sf . ' ' . $sl)); ?>
                                         </div>
                                     </td>
                                     <td class="border border-gray-300 dark:border-gray-600 px-4 py-3 text-gray-700 dark:text-gray-300">
@@ -189,7 +214,13 @@ try {
                                         <div class="flex flex-col space-y-1.5">
                                             <!-- View Profile Button -->
                                             <button type="button" 
-                                                onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'] ?? ($student['strand'] ?? ''))) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>')" 
+                                                <?php 
+                                                    $sf = $student['firstname'] ?? ($student['first_name'] ?? '');
+                                                    $sl = $student['lastname']  ?? ($student['last_name']  ?? '');
+                                                    $deptStr = $student['department'] ?? ($student['strand'] ?? '');
+                                                    $picStr = $student['profile_pic'] ?? '';
+                                                ?>
+                                                onclick="showProfileModal('<?= htmlspecialchars(addslashes($sf)) ?>','<?= htmlspecialchars(addslashes($sl)) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($deptStr)) ?>','<?= htmlspecialchars(addslashes($picStr)) ?>')" 
                                                 class="inline-flex items-center justify-center w-full bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm font-medium shadow hover:shadow-md transform hover:-translate-y-0.5 transition duration-200">
                                                 <i class="fas fa-user mr-1.5"></i> View Profile
                                             </button>
@@ -241,7 +272,11 @@ try {
                             <div class="flex items-start gap-3">
                                 <img src="<?= $pic ?>" alt="Profile" class="w-12 h-12 rounded-full object-cover border">
                                 <div class="min-w-0">
-                                    <h4 class="text-base font-semibold text-gray-900 truncate"><?= htmlspecialchars($student['firstname'] . ' ' . $student['lastname']); ?></h4>
+                                    <?php 
+                                        $sf = $student['firstname'] ?? ($student['first_name'] ?? '');
+                                        $sl = $student['lastname']  ?? ($student['last_name']  ?? '');
+                                    ?>
+                                    <h4 class="text-base font-semibold text-gray-900 truncate"><?= htmlspecialchars(trim($sf . ' ' . $sl)); ?></h4>
                                     <p class="text-xs text-gray-500">Email: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['email']); ?></span></p>
                                     <p class="text-xs text-gray-500">Student #: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['student_id'] ?? 'N/A'); ?></span></p>
                                     <p class="text-xs text-gray-500">Department: <span class="font-medium text-gray-700"><?= htmlspecialchars($student['department'] ?? ($student['strand'] ?? 'N/A')); ?></span></p>
@@ -249,7 +284,13 @@ try {
                             </div>
                             <div class="mt-3 grid grid-cols-2 gap-2">
                                 <button type="button" 
-                                    onclick="showProfileModal('<?= htmlspecialchars(addslashes($student['firstname'])) ?>','<?= htmlspecialchars(addslashes($student['lastname'])) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($student['department'] ?? ($student['strand'] ?? ''))) ?>','<?= htmlspecialchars(addslashes($student['profile_pic'])) ?>')" 
+                                    <?php 
+                                        $sf = $student['firstname'] ?? ($student['first_name'] ?? '');
+                                        $sl = $student['lastname']  ?? ($student['last_name']  ?? '');
+                                        $deptStr = $student['department'] ?? ($student['strand'] ?? '');
+                                        $picStr = $student['profile_pic'] ?? '';
+                                    ?>
+                                    onclick="showProfileModal('<?= htmlspecialchars(addslashes($sf)) ?>','<?= htmlspecialchars(addslashes($sl)) ?>','<?= htmlspecialchars(addslashes($student['email'])) ?>','<?= htmlspecialchars(addslashes($student['student_id'] ?? '')) ?>','<?= htmlspecialchars(addslashes($deptStr)) ?>','<?= htmlspecialchars(addslashes($picStr)) ?>')" 
                                     class="inline-flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-sm font-medium shadow">
                                     <i class="fas fa-user mr-1"></i> View
                                 </button>

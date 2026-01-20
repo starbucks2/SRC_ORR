@@ -29,10 +29,11 @@ $RECAPTCHA_SITE_KEY = get_env_var('RECAPTCHA_SITE_KEY', '');
 $RECAPTCHA_SECRET_KEY = get_env_var('RECAPTCHA_SECRET_KEY', '');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $firstname = trim($_POST['firstname']);
-    $middlename = trim($_POST['middlename']);
-    $lastname = trim($_POST['lastname']);
-    $suffix = trim($_POST['suffix']);
+    // Match HTML input names: firstname, middlename, lastname
+    $firstname = trim($_POST['firstname'] ?? '');
+    $middlename = trim($_POST['middlename'] ?? '');
+    $lastname = trim($_POST['lastname'] ?? '');
+    $suffix = trim($_POST['suffix'] ?? '');
     $email = filter_var($_POST['email'], FILTER_SANITIZE_EMAIL);
     $password = $_POST['password'];
     $confirm_password = $_POST['confirm_password'];
@@ -76,27 +77,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     
-    // Validate department
-    $valid_departments = ['CCS','CBS','COE','Senior High School'];
-    if (!in_array($department, $valid_departments, true)) {
+    // Validate department from DB
+    try {
+        $deptStmt = $conn->prepare("SELECT department_id, name, code, is_active FROM departments WHERE name = ? LIMIT 1");
+        $deptStmt->execute([$department]);
+        $deptRow = $deptStmt->fetch(PDO::FETCH_ASSOC);
+    } catch (Exception $e) { $deptRow = false; }
+    if (!$deptRow || (int)$deptRow['is_active'] !== 1) {
         $_SESSION['error'] = "Invalid department selected.";
         store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
         header("Location: register.php");
         exit();
     }
-
-    // Validate course/strand based on department
-    $valid_courses_strands = [
-        'CCS' => ['BSIS'],
-        'CBS' => ['BSAIS', 'BSENTREP'],
-        'COE' => ['BEED', 'BSED'],
-        'Senior High School' => ['ABM', 'TVL', 'GAS', 'HUMSS', 'STEM']
-    ];
-    if (!isset($valid_courses_strands[$department]) || !in_array($course_strand, $valid_courses_strands[$department], true)) {
-        $_SESSION['error'] = "Invalid course/strand selected for the chosen department.";
-        store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
-        header("Location: register.php");
-        exit();
+    // Validate course/strand based on department from DB
+    $isSHS = (strtolower($deptRow['name']) === 'senior high school' || strtolower((string)$deptRow['code']) === 'shs');
+    if ($isSHS) {
+        try {
+            // strands by name
+            $sStmt = $conn->prepare("SELECT COUNT(*) FROM strands WHERE strand = ?");
+            $sStmt->execute([$course_strand]);
+            if ((int)$sStmt->fetchColumn() === 0) {
+                throw new Exception('Invalid strand');
+            }
+        } catch (Exception $e) {
+            $_SESSION['error'] = "Invalid strand selected.";
+            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
+            header("Location: register.php");
+            exit();
+        }
+    } else {
+        try {
+            $cStmt = $conn->prepare("SELECT COUNT(*) FROM courses WHERE department_id = ? AND course_name = ? AND is_active = 1");
+            $cStmt->execute([(int)$deptRow['department_id'], $course_strand]);
+            if ((int)$cStmt->fetchColumn() === 0) {
+                throw new Exception('Invalid course');
+            }
+        } catch (Exception $e) {
+            $_SESSION['error'] = "Invalid course selected for the chosen department.";
+            store_old($firstname, $middlename, $lastname, $suffix, $email, $student_id, $department, $course_strand);
+            header("Location: register.php");
+            exit();
+        }
     }
 
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -197,6 +218,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $conn->exec("ALTER TABLE students ADD COLUMN profile_pic VARCHAR(255) NULL AFTER password");
             }
         } catch (Exception $e) { /* ignore */ }
+
+        // Ensure rfid_number, if present, is NULL-able (not empty-string default) to avoid duplicate '' unique constraint errors
+        try {
+            $colChkRfid = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students' AND COLUMN_NAME = 'rfid_number'");
+            $colChkRfid->execute();
+            if ((int)$colChkRfid->fetchColumn() > 0) {
+                // Make it nullable with NULL default
+                $conn->exec("ALTER TABLE students MODIFY COLUMN rfid_number VARCHAR(64) NULL DEFAULT NULL");
+                // Normalize existing empty strings to NULL so unique index won't collide
+                $conn->exec("UPDATE students SET rfid_number = NULL WHERE rfid_number = ''");
+                // Ensure a unique index exists (allowing multiple NULLs)
+                try { $conn->exec("ALTER TABLE students ADD UNIQUE KEY uniq_rfid_number (rfid_number)"); } catch (Throwable $_) { /* might already exist */ }
+            }
+        } catch (Exception $e) { /* ignore */ }
         try {
             $colChkVer = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students' AND COLUMN_NAME = 'is_verified'");
             $colChkVer->execute();
@@ -263,8 +298,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         // Insert student (pending verification) using student_id
-        $stmt = $conn->prepare("INSERT INTO students (firstname, middlename, lastname, suffix, email, department, course_strand, student_id, password, profile_pic, is_verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmt->execute([$firstname, $middlename, $lastname, $suffix, $email, $department, $course_strand, $student_id, $hashed_password, $profilePicName, 0]);
+        // Dynamically map to existing name columns to avoid 'Unknown column' errors
+        $colsRes = $conn->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students'");
+        $colsRes->execute();
+        $studentCols = $colsRes->fetchAll(PDO::FETCH_COLUMN, 0);
+        $colFirst  = in_array('firstname', $studentCols, true)  ? 'firstname'  : (in_array('first_name', $studentCols, true)  ? 'first_name'  : null);
+        $colMiddle = in_array('middlename', $studentCols, true) ? 'middlename' : (in_array('middle_name', $studentCols, true) ? 'middle_name' : null);
+        $colLast   = in_array('lastname', $studentCols, true)   ? 'lastname'   : (in_array('last_name', $studentCols, true)   ? 'last_name'   : null);
+        $colSuffix = in_array('suffix', $studentCols, true)     ? 'suffix'     : null;
+
+        $insertCols = [];
+        $insertVals = [];
+        if ($colFirst)  { $insertCols[] = $colFirst;  $insertVals[] = $firstname; }
+        if ($colMiddle) { $insertCols[] = $colMiddle; $insertVals[] = $middlename; }
+        if ($colLast)   { $insertCols[] = $colLast;   $insertVals[] = $lastname; }
+        if ($colSuffix) { $insertCols[] = $colSuffix; $insertVals[] = $suffix; }
+        $insertCols[] = 'email';         $insertVals[] = $email;
+        $insertCols[] = 'department';    $insertVals[] = $department;
+        $insertCols[] = 'course_strand'; $insertVals[] = $course_strand;
+        $insertCols[] = 'student_id';    $insertVals[] = $student_id;
+        $insertCols[] = 'password';      $insertVals[] = $hashed_password;
+        $insertCols[] = 'profile_pic';   $insertVals[] = $profilePicName;
+        $insertCols[] = 'is_verified';   $insertVals[] = 0;
+
+        // If rfid_number column exists, set it to NULL explicitly when not provided by form
+        if (in_array('rfid_number', $studentCols, true)) {
+            $insertCols[] = 'rfid_number';
+            $insertVals[] = null; // avoid empty-string unique collisions
+        }
+
+        $placeholders = rtrim(str_repeat('?,', count($insertCols)), ',');
+        $sql = "INSERT INTO students (" . implode(',', $insertCols) . ") VALUES ($placeholders)";
+        $stmt = $conn->prepare($sql);
+        $stmt->execute($insertVals);
 
         unset($_SESSION['old']);
         $_SESSION['success'] = "Registration successfully! Please wait for the Teacher to verify your account.";
@@ -470,10 +536,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <select name="department" id="department" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required>
                     <?php $oldDept = $old['department'] ?? ''; ?>
                     <option value="" <?= empty($oldDept) ? 'selected' : '' ?>>Select Department</option>
-                    <option value="CCS" <?= ($oldDept==='CCS'?'selected':'') ?>>CCS (College of Computer Studies)</option>
-                    <option value="CBS" <?= ($oldDept==='CBS'?'selected':'') ?>>CBS (College of Business Studies)</option>
-                    <option value="COE" <?= ($oldDept==='COE'?'selected':'') ?>>COE (College of Education)</option>
-                    <option value="Senior High School" <?= ($oldDept==='Senior High School'?'selected':'') ?>>Senior High School</option>
                 </select>
             </div>
 
@@ -483,7 +545,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <span id="course-strand-label">Course/Strand</span> <span class="text-red-500">*</span>
                 </label>
                 <select name="course_strand" id="course_strand" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 transition" required>
-                    <option value="">Select Course/Strand</option>
+                    <?php $oldCS = $old['course_strand'] ?? ''; ?>
+                    <option value="" <?= empty($oldCS) ? 'selected' : '' ?>>Select Course/Strand</option>
                 </select>
             </div>
 
@@ -826,106 +889,94 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     })();
 
-    // Dynamic Course/Strand Selection based on Department
-    (function setupCourseStrandSelection() {
-        const departmentSelect = document.getElementById('department');
-        const courseStrandContainer = document.getElementById('course-strand-container');
-        const courseStrandSelect = document.getElementById('course_strand');
-        const courseStrandLabel = document.getElementById('course-strand-label');
+    // Dynamic Course/Strand Selection based on Department (DB-backed)
+    (async function setupDynamicSelections() {
+        const deptSel = document.getElementById('department');
+        const csContainer = document.getElementById('course-strand-container');
+        const csSel = document.getElementById('course_strand');
+        const csLabel = document.getElementById('course-strand-label');
         const studentIdLabel = document.getElementById('student-id-label');
+        const oldDept = <?php echo json_encode($old['department'] ?? ''); ?>;
+        const oldCS = <?php echo json_encode($old['course_strand'] ?? ''); ?>;
 
-        const courseStrandOptions = {
-            'CCS': {
-                label: 'Course',
-                options: ['BSIS'],
-                studentIdLabel: 'Student ID'
-            },
-            'CBS': {
-                label: 'Course',
-                options: ['BSAIS', 'BSENTREP'],
-                studentIdLabel: 'Student ID'
-            },
-            'COE': {
-                label: 'Course',
-                options: ['BEED', 'BSED'],
-                studentIdLabel: 'Student ID'
-            },
-            'Senior High School': {
-                label: 'Strand',
-                options: ['ABM', 'TVL', 'GAS', 'HUMSS', 'STEM'],
-                studentIdLabel: 'LRN NO.'
-            }
-        };
-
-        function updateCourseStrandOptions() {
-            const selectedDept = departmentSelect.value;
-            const lrnInput = document.getElementById('lrn');
-            const lrnError = document.getElementById('lrn-error');
-            
-            if (selectedDept && courseStrandOptions[selectedDept]) {
-                const config = courseStrandOptions[selectedDept];
-                courseStrandLabel.textContent = config.label;
-                
-                // Update Student ID label based on department
-                if (studentIdLabel) {
-                    studentIdLabel.textContent = config.studentIdLabel;
-                }
-                
-                // Update placeholder and clear input when department changes
-                if (lrnInput) {
-                    if (selectedDept === 'Senior High School') {
-                        lrnInput.placeholder = '12-digit LRN';
-                        lrnInput.maxLength = 12;
-                    } else {
-                        lrnInput.placeholder = 'YY-XXXXXXX';
-                        lrnInput.maxLength = 10;
-                    }
-                    // Clear the input and error when department changes
-                    lrnInput.value = '';
-                    if (lrnError) lrnError.textContent = '';
-                }
-                
-                // Clear existing options
-                courseStrandSelect.innerHTML = '<option value="">Select ' + config.label + '</option>';
-                
-                // Add new options
-                config.options.forEach(option => {
-                    const optionElement = document.createElement('option');
-                    optionElement.value = option;
-                    optionElement.textContent = option;
-                    <?php if (isset($old['course_strand'])): ?>
-                    if (option === <?php echo json_encode($old['course_strand']); ?>) {
-                        optionElement.selected = true;
-                    }
-                    <?php endif; ?>
-                    courseStrandSelect.appendChild(optionElement);
+        async function loadDepartments() {
+            try {
+                const res = await fetch('include/get_departments.php');
+                const json = await res.json();
+                if (!json.ok) throw new Error(json.error || 'Failed to load departments');
+                const keep = deptSel.value;
+                deptSel.innerHTML = '<option value="">Select Department</option>';
+                json.data.forEach(d => {
+                    const opt = document.createElement('option');
+                    opt.value = d.name;
+                    opt.textContent = d.name;
+                    opt.dataset.deptId = d.id;
+                    if ((oldDept && d.name === oldDept) || (!oldDept && keep && d.name === keep)) opt.selected = true;
+                    deptSel.appendChild(opt);
                 });
-                
-                // Show the container
-                courseStrandContainer.style.display = 'block';
-                courseStrandSelect.required = true;
-            } else {
-                // Hide the container if no department selected
-                courseStrandContainer.style.display = 'none';
-                courseStrandSelect.required = false;
-                courseStrandSelect.innerHTML = '<option value="">Select Course/Strand</option>';
-                // Reset to default label
-                if (studentIdLabel) {
-                    studentIdLabel.textContent = 'Student ID';
-                }
-                if (lrnInput) {
-                    lrnInput.placeholder = 'YY-XXXXXXX';
-                    lrnInput.value = '';
-                }
-                if (lrnError) lrnError.textContent = '';
-            }
+            } catch (e) { console.error(e); }
         }
 
-        if (departmentSelect) {
-            departmentSelect.addEventListener('change', updateCourseStrandOptions);
-            // Initialize on page load
-            updateCourseStrandOptions();
+        async function loadStrands() {
+            try {
+                const res = await fetch('include/get_strands.php');
+                const json = await res.json();
+                if (!json.ok) throw new Error(json.error || 'Failed to load strands');
+                csSel.innerHTML = '<option value="">Select Strand</option>';
+                json.data.forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.strand;
+                    opt.textContent = s.strand;
+                    if (oldCS && s.strand === oldCS) opt.selected = true;
+                    csSel.appendChild(opt);
+                });
+            } catch (e) { console.error(e); }
         }
+
+        async function loadCoursesForDepartmentId(deptId) {
+            try {
+                const res = await fetch('include/get_courses.php?department_id=' + encodeURIComponent(deptId));
+                const json = await res.json();
+                if (!json.ok) throw new Error(json.error || 'Failed to load courses');
+                csSel.innerHTML = '<option value="">Select Course</option>';
+                json.data.forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.name;
+                    opt.textContent = c.name + (c.code ? ` (${c.code})` : '');
+                    if (oldCS && c.name === oldCS) opt.selected = true;
+                    csSel.appendChild(opt);
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        async function onDepartmentChange() {
+            const opt = deptSel.options[deptSel.selectedIndex];
+            const deptId = opt ? opt.dataset.deptId : '';
+            const deptName = opt ? opt.value : '';
+            if (!deptId) {
+                csContainer.style.display = 'none';
+                csSel.required = false;
+                csSel.innerHTML = '<option value="">Select Course/Strand</option>';
+                if (studentIdLabel) studentIdLabel.textContent = 'Student ID';
+                return;
+            }
+            csContainer.style.display = '';
+            csSel.required = true;
+            if (deptName.toLowerCase() === 'senior high school') {
+                csLabel.textContent = 'Strand';
+                if (studentIdLabel) studentIdLabel.textContent = 'LRN NO.';
+                await loadStrands();
+            } else {
+                csLabel.textContent = 'Course';
+                if (studentIdLabel) studentIdLabel.textContent = 'Student ID';
+                await loadCoursesForDepartmentId(deptId);
+            }
+            // Reset oldCS after first render to avoid sticky selection on mode switch
+        }
+
+        await loadDepartments();
+        await onDepartmentChange();
+        deptSel.addEventListener('change', onDepartmentChange);
     })();
 </script>
 </body>

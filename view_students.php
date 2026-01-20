@@ -51,18 +51,32 @@ try {
         throw new Exception('Database connection not available');
     }
 
+    // Detect available name columns for ordering
+    $cols = [];
+    try {
+        $qCols = $conn->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'students'");
+        $qCols->execute();
+        $cols = $qCols->fetchAll(PDO::FETCH_COLUMN, 0);
+    } catch (Throwable $_) { $cols = []; }
+    $firstCol = in_array('firstname', $cols, true) ? 'firstname' : (in_array('first_name', $cols, true) ? 'first_name' : null);
+    $lastCol  = in_array('lastname',  $cols, true) ? 'lastname'  : (in_array('last_name',  $cols, true) ? 'last_name'  : null);
+    $orderBy  = 'email';
+    if ($lastCol && $firstCol) { $orderBy = "`$lastCol`, `$firstCol`"; }
+    elseif ($lastCol) { $orderBy = "`$lastCol`"; }
+    elseif ($firstCol) { $orderBy = "`$firstCol`"; }
+
     if ($is_admin) {
         // Admin: view all students
-        $sqlPending = "SELECT * FROM students WHERE is_verified = 0 ORDER BY lastname, firstname";
-        $sqlVerified = "SELECT * FROM students WHERE is_verified = 1 ORDER BY lastname, firstname";
+        $sqlPending = "SELECT * FROM students WHERE is_verified = 0 ORDER BY $orderBy";
+        $sqlVerified = "SELECT * FROM students WHERE is_verified = 1 ORDER BY $orderBy";
         $pendingStmt = $conn->prepare($sqlPending);
         $verifiedStmt = $conn->prepare($sqlVerified);
         $pendingStmt->execute();
         $verifiedStmt->execute();
     } else {
         // Sub-admin: restrict to their assigned department (case-insensitive)
-        $sqlPending = "SELECT * FROM students WHERE is_verified = 0 AND UPPER(department) = UPPER(?) ORDER BY lastname, firstname";
-        $sqlVerified = "SELECT * FROM students WHERE is_verified = 1 AND UPPER(department) = UPPER(?) ORDER BY lastname, firstname";
+        $sqlPending = "SELECT * FROM students WHERE is_verified = 0 AND UPPER(department) = UPPER(?) ORDER BY $orderBy";
+        $sqlVerified = "SELECT * FROM students WHERE is_verified = 1 AND UPPER(department) = UPPER(?) ORDER BY $orderBy";
         $pendingStmt = $conn->prepare($sqlPending);
         $verifiedStmt = $conn->prepare($sqlVerified);
         $params = [$assigned_department];
@@ -163,8 +177,8 @@ try {
                                         <img src="<?= $pic ?>" alt="Profile" class="w-10 h-10 rounded-full object-cover border" />
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['student_id'] ?? ''); ?></td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['firstname']); ?></td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['lastname']); ?></td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['first_name']); ?></td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['last_name']); ?></td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['department'] ?? ''); ?></td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['course_strand'] ?? 'N/A'); ?></td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700"><?php echo htmlspecialchars($row['email']); ?></td>

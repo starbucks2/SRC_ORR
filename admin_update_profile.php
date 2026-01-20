@@ -13,10 +13,30 @@ $success_message = $error_message = '';
 $admin_data = [];
 
 try {
-    // Fetch current admin data
-    $stmt = $conn->prepare("SELECT id, fullname, email FROM admin WHERE id = ?");
+    // Detect name columns in employees
+    $empCols = [];
+    try {
+        $qCols = $conn->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees'");
+        $qCols->execute();
+        $empCols = $qCols->fetchAll(PDO::FETCH_COLUMN, 0);
+    } catch (Throwable $_) { $empCols = []; }
+    $firstCol = in_array('first_name', $empCols, true) ? 'first_name' : (in_array('firstname', $empCols, true) ? 'firstname' : null);
+    $lastCol  = in_array('last_name',  $empCols, true) ? 'last_name'  : (in_array('lastname',  $empCols, true)  ? 'lastname'  : null);
+
+    // Fetch current admin data from employees using employee_id from session
+    $stmt = $conn->prepare("SELECT employee_id, email, ".($firstCol?$firstCol:"''")." AS first_name_co, ".($lastCol?$lastCol:"''")." AS last_name_co FROM employees WHERE employee_id = ? LIMIT 1");
     $stmt->execute([$_SESSION['admin_id']]);
-    $admin_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row) {
+        $fullname = trim(($row['first_name_co'] ?? '') . ' ' . ($row['last_name_co'] ?? ''));
+        $admin_data = [
+            'employee_id' => $row['employee_id'],
+            'fullname' => $fullname,
+            'email' => $row['email'] ?? ''
+        ];
+    } else {
+        $error_message = "Admin account not found in employees.";
+    }
 } catch (PDOException $e) {
     $error_message = "Error fetching admin data: " . $e->getMessage();
 }
@@ -27,24 +47,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $email = trim($_POST['email']);
         
         try {
-            // Check if email already exists for other admins
-            $stmt = $conn->prepare("SELECT id FROM admin WHERE email = ? AND id != ?");
+            // Check if email already exists for other employees
+            $stmt = $conn->prepare("SELECT employee_id FROM employees WHERE email = ? AND employee_id <> ? LIMIT 1");
             $stmt->execute([$email, $_SESSION['admin_id']]);
             if ($stmt->rowCount() > 0) {
-                $error_message = "Email already exists for another admin.";
+                $error_message = "Email already exists for another account.";
             } else {
-                // Update admin profile
-                $stmt = $conn->prepare("UPDATE admin SET fullname = ?, email = ? WHERE id = ?");
-                $stmt->execute([$fullname, $email, $_SESSION['admin_id']]);
+                // Split fullname to first/last if columns exist
+                $firstVal = $fullname; $lastVal = '';
+                if ($firstCol || $lastCol) {
+                    $parts = preg_split('/\s+/', trim($fullname));
+                    if (count($parts) > 1) { $lastVal = array_pop($parts); $firstVal = trim(implode(' ', $parts)); }
+                }
+                // Build dynamic update
+                $sets = [ 'email = ?' ];
+                $params = [ $email ];
+                if ($firstCol) { $sets[] = "$firstCol = ?"; $params[] = $firstVal; }
+                if ($lastCol)  { $sets[] = "$lastCol = ?";  $params[] = $lastVal; }
+                $sql = "UPDATE employees SET ".implode(', ', $sets)." WHERE employee_id = ?";
+                $params[] = $_SESSION['admin_id'];
+                $stmt = $conn->prepare($sql);
+                $stmt->execute($params);
 
                 // Update session data
                 $_SESSION['fullname'] = $fullname;
                 $success_message = "Profile successfully updated!";
                 
                 // Refresh admin data
-                $stmt = $conn->prepare("SELECT id, fullname, email FROM admin WHERE id = ?");
-                $stmt->execute([$_SESSION['admin_id']]);
-                $admin_data = $stmt->fetch(PDO::FETCH_ASSOC);
+                $admin_data = [
+                    'employee_id' => $_SESSION['admin_id'],
+                    'fullname' => $fullname,
+                    'email' => $email
+                ];
             }
         } catch (PDOException $e) {
             $error_message = "Error updating profile: " . $e->getMessage();
@@ -55,19 +89,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $confirm_password = $_POST['confirm_password'];
         
         try {
-            // Verify current password
-            $stmt = $conn->prepare("SELECT password FROM admin WHERE id = ?");
+            // Verify current password in employees
+            $stmt = $conn->prepare("SELECT password FROM employees WHERE employee_id = ? LIMIT 1");
             $stmt->execute([$_SESSION['admin_id']]);
-            $admin = $stmt->fetch();
-            
+            $admin = $stmt->fetch(PDO::FETCH_ASSOC);
             if ($admin && password_verify($current_password, $admin['password'])) {
                 if ($new_password === $confirm_password) {
                     if (strlen($new_password) >= 8) {
                         // Update password
                         $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
-                        $stmt = $conn->prepare("UPDATE admin SET password = ? WHERE id = ?");
+                        $stmt = $conn->prepare("UPDATE employees SET password = ? WHERE employee_id = ?");
                         $stmt->execute([$hashed_password, $_SESSION['admin_id']]);
-                        
                         $success_message = "Password successfully updated!";
                     } else {
                         $error_message = "New password must be at least 8 characters long.";

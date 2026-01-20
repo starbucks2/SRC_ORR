@@ -11,8 +11,25 @@ if (isset($_SESSION['user_type']) && !empty($_SESSION['department']) &&
     $user_course_strand = $_SESSION['course_strand'] ?? null;
     $department_filter = $user_department; // force to user's department
 } else {
-    // Others can use URL filter (accept legacy strand for compatibility)
-    $department_filter = $_GET['department'] ?? ($_GET['strand'] ?? 'all');
+    // Fallback: if a sub-admin is logged in but user_type/department not set, derive from employees
+    if (!empty($_SESSION['subadmin_id'])) {
+        try {
+            // Get department from employees table using roles table (role_id = 2 for RESEARCH_ADVISER)
+            $qDept = $conn->prepare("SELECT e.department FROM employees e INNER JOIN roles r ON e.employee_id = r.employee_id WHERE e.employee_id = ? AND r.role_id = 2 LIMIT 1");
+            $qDept->execute([$_SESSION['subadmin_id']]);
+            $dept = (string)($qDept->fetchColumn() ?: '');
+            if ($dept !== '') {
+                $user_department = $dept;
+                $department_filter = $dept; // force filter for sub-admin
+                // Persist to session for subsequent pages
+                $_SESSION['department'] = $dept;
+            }
+        } catch (Throwable $_) { /* ignore and fall back to URL */ }
+    }
+    if ($user_department === null) {
+        // Others can use URL filter (accept legacy strand for compatibility)
+        $department_filter = $_GET['department'] ?? ($_GET['strand'] ?? 'all');
+    }
 }
 
 // Course/Strand filter from URL
@@ -27,6 +44,8 @@ $current_student_id = (isset($_SESSION['user_type']) && $_SESSION['user_type'] =
 // Ensure these exist even if an exception path skips assignments later
 $filtered_total_items = 0;
 $filtered_total_pages = 0;
+$total_items = 0;
+$total_pages = 1;
 
 // --- Helper functions for citations ---
 if (!function_exists('format_author_name_apa')) {
@@ -103,65 +122,103 @@ if ($__academic_year === '') {
 $__ay_like = '%' . $__academic_year . '%';
 
 try {
-    // Ensure research_submission has course_strand column
-    try {
-        $colCheck = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'research_submission' AND COLUMN_NAME = 'course_strand'");
-        $colCheck->execute();
-        if ((int)$colCheck->fetchColumn() === 0) {
-            $conn->exec("ALTER TABLE research_submission ADD COLUMN course_strand VARCHAR(50) NULL AFTER department");
-        }
-    } catch (Exception $e) { /* ignore */ }
+    // Build a combined dataset of admin uploads (books) and student uploads (research_submission)
+    // Normalize columns for union
+    $base_union = "(
+        SELECT 
+            b.book_id AS id,
+            b.title,
+            b.year,
+            b.abstract,
+            b.keywords,
+            b.authors AS author,
+            NULL AS members,
+            b.department,
+            b.course_strand,
+            b.image,
+            b.document,
+            COALESCE(b.views, 0) AS views,
+            COALESCE(b.created_at, b.updated_at, NOW()) AS submission_date,
+            NULL AS student_id,
+            'admin' AS uploader_type
+        FROM books b
+        WHERE b.status = 1 AND b.document IS NOT NULL AND b.document <> ''
+        UNION ALL
+        SELECT 
+            rs.id,
+            rs.title,
+            rs.year,
+            rs.abstract,
+            rs.keywords,
+            rs.author,
+            rs.members,
+            rs.department,
+            rs.course_strand,
+            rs.image,
+            rs.document,
+            COALESCE(rs.views, 0) AS views,
+            rs.submission_date,
+            rs.student_id,
+            'student' AS uploader_type
+        FROM research_submission rs
+        WHERE rs.status = 1 AND rs.document IS NOT NULL AND rs.document <> ''
+    )";
 
-    // First get total count for pagination with proper department and course/strand handling
-    $count_query = "SELECT COUNT(DISTINCT rs.document) as total 
-                    FROM research_submission rs 
-                    LEFT JOIN students s ON rs.student_id = s.student_id 
-                    WHERE (rs.status = 1" . ($current_student_id ? " OR rs.student_id = ?" : "") . ")
-                      AND rs.year LIKE ?";
-    $count_params = [];
-    if ($current_student_id) { $count_params[] = $current_student_id; }
-    $count_params[] = $__ay_like;
-    // Enforce student's department and course/strand if logged in as student
+    // Build filters for combined alias "rs" by wrapping the union as a subquery
+    $filters_sql = " WHERE (rs.year LIKE ? OR rs.student_id IS NULL OR rs.student_id = '')";
+    $filters_params = [];
+    $filters_params[] = $__ay_like;
+    // Optional server-side search
+    $search_sql = '';
+    if (isset($_GET['search']) && trim($_GET['search']) !== '') {
+        $search_term = '%' . trim($_GET['search']) . '%';
+        $search_sql = " AND (rs.title LIKE ? OR rs.keywords LIKE ? OR rs.author LIKE ? OR rs.department LIKE ?)";
+        array_push($filters_params, $search_term, $search_term, $search_term, $search_term);
+    }
+    if ($current_student_id) {
+        // If a student is logged in, always include their own submissions
+        $filters_sql = " WHERE (rs.year LIKE ? OR rs.student_id = ? OR rs.student_id IS NULL OR rs.student_id = '')";
+        $filters_params = [$__ay_like, $current_student_id];
+    }
     if ($user_department !== null) {
-        $count_query .= " AND (rs.department = ? OR s.department = ?)";
-        $count_params[] = $user_department;
-        $count_params[] = $user_department;
-        // Filter by course/strand if student has one
+        $filters_sql .= " AND (rs.department = ? OR rs.student_id IS NULL OR rs.student_id = '')";
+        $filters_params[] = $user_department;
         if ($user_course_strand !== null && $user_course_strand !== '') {
-            $count_query .= " AND (rs.course_strand = ? OR s.course_strand = ? OR rs.course_strand IS NULL)";
-            $count_params[] = $user_course_strand;
-            $count_params[] = $user_course_strand;
+            $filters_sql .= " AND ((rs.course_strand = ?) OR rs.student_id IS NULL OR rs.student_id = '')";
+            $filters_params[] = $user_course_strand;
         }
     } elseif ($department_filter !== 'all') {
-        $count_query .= " AND (rs.department = ? OR s.department = ?)";
-        $count_params[] = $department_filter;
-        $count_params[] = $department_filter;
-        // Apply course/strand filter for admins/sub-admins
+        $filters_sql .= " AND (rs.department = ? OR rs.student_id IS NULL OR rs.student_id = '')";
+        $filters_params[] = $department_filter;
         if ($course_strand_filter !== 'all') {
-            $count_query .= " AND (rs.course_strand = ? OR s.course_strand = ?)";
-            $count_params[] = $course_strand_filter;
-            $count_params[] = $course_strand_filter;
+            $filters_sql .= " AND ((rs.course_strand = ?) OR rs.student_id IS NULL OR rs.student_id = '')";
+            $filters_params[] = $course_strand_filter;
         }
     }
+    $filters_sql .= $search_sql;
+
+    // Count total (no de-dup across sources to simplify)
+    $count_query = "SELECT COUNT(*) AS total FROM (" . $base_union . ") rs " . $filters_sql;
     $count_stmt = $conn->prepare($count_query);
-    $count_stmt->execute($count_params);
-    $total_items = $count_stmt->fetch(PDO::FETCH_ASSOC)['total'];
-    
-    // Calculate pagination values
+    $count_stmt->execute($filters_params);
+    $total_items = (int)$count_stmt->fetch(PDO::FETCH_ASSOC)['total'];
+
+    // Pagination (10 per page)
     $items_per_page = 10;
     $current_page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-    $current_page = max(1, $current_page); // Ensure page is at least 1
-    $total_pages = ceil($total_items / $items_per_page);
-    $current_page = min($current_page, max(1, $total_pages)); // Ensure page doesn't exceed total
+    $current_page = max(1, $current_page);
+    $total_pages = max(1, (int)ceil($total_items / $items_per_page));
+    if ($current_page > $total_pages) { $current_page = $total_pages; }
     $offset = ($current_page - 1) * $items_per_page;
 
-    // Main query with direct department and course/strand handling from research_submission
+    // Main query over combined data
     $query = "SELECT 
                 rs.id,
                 rs.title,
                 rs.year,
                 rs.abstract,
                 rs.keywords,
+                rs.author,
                 rs.members,
                 rs.department,
                 rs.course_strand,
@@ -171,54 +228,24 @@ try {
                 rs.submission_date,
                 rs.student_id,
                 s.firstname AS student_firstname,
-                CASE 
-                    WHEN rs.student_id > 0 THEN 'student'
-                    ELSE 'admin'
-                END as uploader_type
-            FROM research_submission rs
+                rs.uploader_type
+            FROM (" . $base_union . ") rs
             LEFT JOIN students s ON rs.student_id = s.student_id
-            WHERE (rs.status = 1" . ($current_student_id ? " OR rs.student_id = ?" : "") . ")
-              AND rs.document IS NOT NULL AND rs.document <> ''
-              AND rs.year LIKE ?";
+            " . $filters_sql . "
+            ORDER BY rs.submission_date DESC
+            LIMIT " . (int)$items_per_page . " OFFSET " . (int)$offset . "";
 
-    $params = [];
-    if ($current_student_id) { $params[] = $current_student_id; }
-    $params[] = $__ay_like;
-    // Enforce student's department and course/strand if logged in as student
-    if ($user_department !== null) {
-        $query .= " AND (rs.department = ? OR s.department = ?)";
-        $params[] = $user_department;
-        $params[] = $user_department;
-        // Filter by course/strand if student has one
-        if ($user_course_strand !== null && $user_course_strand !== '') {
-            $query .= " AND (rs.course_strand = ? OR s.course_strand = ? OR rs.course_strand IS NULL)";
-            $params[] = $user_course_strand;
-            $params[] = $user_course_strand;
-        }
-    } elseif ($department_filter !== 'all') {
-        // Filter by chosen department
-        $query .= " AND (rs.department = ? OR s.department = ?)";
-        $params[] = $department_filter;
-        $params[] = $department_filter;
-        // Apply course/strand filter for admins/sub-admins
-        if ($course_strand_filter !== 'all') {
-            $query .= " AND (rs.course_strand = ? OR s.course_strand = ?)";
-            $params[] = $course_strand_filter;
-            $params[] = $course_strand_filter;
-        }
-    }
-    $query .= " ORDER BY rs.submission_date DESC";
+    $params = $filters_params;
 
     $stmt = $conn->prepare($query);
     $stmt->execute($params);
     $research_papers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // If we have student_ids referenced, fetch those students in batch to map names/strands
-    $studentIds = [];
-    $researchIds = [];
+    $studentIds = array();
+    $researchIds = array();
     foreach ($research_papers as $r) {
-        // treat student_id as valid when it converts to an integer > 0
-        if (isset($r['student_id']) && intval($r['student_id']) > 0) {
+        if (!empty($r['student_id'])) {
             $studentIds[] = $r['student_id'];
         }
         $researchIds[] = $r['id'];
@@ -286,45 +313,8 @@ try {
     unset($paper); // break reference
 
 
-    // Only deduplicate if viewing all departments
-    if ($department_filter === 'all') {
-        $uniqueMap = [];
-        foreach ($research_papers as $paper) {
-            if (empty($paper['document']) || empty($paper['title'])) continue;
-            $key = strtolower(trim($paper['title'])) . '|' . strtolower(trim(basename($paper['document'])));
-            if (!isset($uniqueMap[$key]) || strtotime($paper['submission_date']) > strtotime($uniqueMap[$key]['submission_date'])) {
-                $uniqueMap[$key] = $paper;
-            }
-        }
-        $research_papers = array_values($uniqueMap);
-    }
-    // Sort by submission_date desc
-    usort($research_papers, function($a, $b) {
-        return strtotime($b['submission_date']) <=> strtotime($a['submission_date']);
-    });
-
-    // Apply search filter if present
-    if (isset($_GET['search']) && !empty($_GET['search'])) {
-        $search_term = strtolower(trim($_GET['search']));
-        $research_papers = array_filter($research_papers, function($paper) use ($search_term) {
-            return strpos(strtolower($paper['title']), $search_term) !== false ||
-                   strpos(strtolower($paper['members'] ?? ''), $search_term) !== false ||
-                   strpos(strtolower($paper['department'] ?? ''), $search_term) !== false ||
-                   strpos(strtolower($paper['keywords'] ?? ''), $search_term) !== false;
-        });
-        $research_papers = array_values($research_papers);
-    }
-
-    // Pagination after deduplication and filtering
-    $filtered_total_items = count($research_papers);
-    $filtered_total_pages = ceil($filtered_total_items / $items_per_page);
-    $current_page = min($current_page, max(1, $filtered_total_pages));
-    $offset = ($current_page - 1) * $items_per_page;
-    $research_papers = array_slice($research_papers, $offset, $items_per_page);
-    
-    // Update pagination variables for display
-    $total_items = $filtered_total_items;
-    $total_pages = $filtered_total_pages;
+    // Total items after count
+    $filtered_total_items = $total_items;
 
 } catch (PDOException $e) {
     // Fallback: just get research without student data
@@ -362,7 +352,7 @@ try {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Research Repository | BNHS</title>
+    <?php include __DIR__ . '/head_meta.php'; ?>
 
     <!-- Google Fonts - Matching Google Scholar -->
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
@@ -532,6 +522,14 @@ try {
             line-height: 1.5;
         }
 
+        /* Highlight style for matched search terms */
+        mark.search-hit {
+            background-color: #ffcccc; /* light red background */
+            color: #991b1b; /* dark red text for contrast */
+            padding: 0 2px;
+            border-radius: 2px;
+        }
+
 
         .paper-actions {
             font-size: 14px;
@@ -696,16 +694,17 @@ try {
         <div class="content-wrapper flex gap-6">
             <!-- Filters Sidebar -->
             <aside class="filters">
-                <h3 class="filter-title"><?= $user_department ? 'YOUR DEPARTMENT' : 'FILTER BY DEPARTMENT' ?></h3>
+                <?php $is_subadmin_ctx = isset($_SESSION['subadmin_id']); $lockedDept = $user_department ?: ($_SESSION['department'] ?? ''); ?>
+                <h3 class="filter-title"><?= ($is_subadmin_ctx || $lockedDept) ? 'YOUR DEPARTMENT' : 'FILTER BY DEPARTMENT' ?></h3>
                 <ul class="filter-options">
-                    <?php if ($user_department): ?>
+                    <?php if ($is_subadmin_ctx || $lockedDept): ?>
                         <li style="font-weight:bold; cursor: default; color:#202124;">
-                            <?= htmlspecialchars($user_department) ?>
+                            <?= htmlspecialchars($lockedDept ?: $department_filter) ?>
                         </li>
                         <?php if ($user_course_strand): ?>
                         <li style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e8e8e8;">
                             <div style="font-size: 11px; color: #5f6368; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">
-                                <?= ($user_department === 'Senior High School') ? 'Your Strand' : 'Your Course' ?>
+                                <?= (($lockedDept ?: $user_department) === 'Senior High School') ? 'Your Strand' : 'Your Course' ?>
                             </div>
                             <div style="font-weight:bold; color:#1a73e8;">
                                 <?= htmlspecialchars($user_course_strand) ?>
@@ -773,6 +772,17 @@ try {
                         <button type="submit" class="absolute right-2 top-1/2 -translate-y-1/2 bg-blue-500 text-white px-3 py-1 rounded-full hover:bg-blue-600 text-sm">Search</button>
                     </form>
                 </div>
+                <?php if (isset($_SESSION['subadmin_id'])): ?>
+                    <?php $lockedDept = $user_department ?: ($_SESSION['department'] ?? $department_filter ?? ''); ?>
+                    <?php if (!empty($lockedDept)): ?>
+                    <div class="mb-3 text-sm">
+                        <span class="inline-flex items-center gap-2 bg-blue-50 text-blue-800 px-3 py-1 rounded border border-blue-200">
+                            <i class="fas fa-lock"></i>
+                            Viewing <?= htmlspecialchars($lockedDept) ?> research only
+                        </span>
+                    </div>
+                    <?php endif; ?>
+                <?php endif; ?>
                 <div class="mb-2 text-right text-gray-700 text-sm">
                     <?php $___fti = isset($filtered_total_items) && $filtered_total_items > 0 ? $filtered_total_items : count($research_papers); ?>
                     Showing <span class="font-semibold"><?= $___fti ?></span> research paper<?= $___fti == 1 ? '' : 's' ?> found
@@ -781,7 +791,7 @@ try {
                 <?php if (count($research_papers) > 0): ?>
                     <?php foreach ($research_papers as $paper): ?>
                         <div class="paper-card" data-title="<?= htmlspecialchars(strtolower($paper['title'] ?? '')) ?>"
-                             data-members="<?= htmlspecialchars(strtolower($paper['members'] ?? '')) ?>"
+                             data-author="<?= htmlspecialchars(strtolower(($paper['members'] ?? $paper['author'] ?? ''))) ?>"
                              data-department="<?= htmlspecialchars(strtolower($paper['department'] ?? '')) ?>"
                              data-course-strand="<?= htmlspecialchars(strtolower($paper['course_strand'] ?? '')) ?>"
                              data-keywords="<?= htmlspecialchars(strtolower($paper['keywords'] ?? '')) ?>">
@@ -815,7 +825,13 @@ try {
                                         <?php endif; ?>
                                     </h3>
                                     <div class="paper-meta">
-                                        <?= htmlspecialchars($paper['members']) ?> - <?= htmlspecialchars($paper['year']) ?>
+                                        <?php 
+                                            $displayAuthors = trim((string)($paper['members'] ?? ''));
+                                            if ($displayAuthors === '') {
+                                                $displayAuthors = trim((string)($paper['author'] ?? ''));
+                                            }
+                                            echo htmlspecialchars($displayAuthors);
+                                        ?> - <?= htmlspecialchars($paper['year']) ?>
                                         <span class="mx-1">•</span>
                                         <?php 
                                             $deptLabel = $paper['department'] ?? ($paper['paper_strand'] ?? '');
@@ -873,23 +889,30 @@ try {
                                         $authorsApa = '';
                                         if (!empty($paper['members'])) {
                                             $authorsApa = format_authors_apa($paper['members']);
+                                        } elseif (!empty($paper['author'])) {
+                                            $authorsApa = format_authors_apa($paper['author']);
                                         }
                                         $yearText = trim((string)($paper['year'] ?? ''));
                                         if ($yearText === '') { $yearText = 'n.d.'; }
                                         $titleText = trim((string)($paper['title'] ?? 'Untitled'));
-                                        $institution = 'Becuran National High School';
-                                        $citationCore = trim(($authorsApa ? $authorsApa . '. ' : '') . '(' . $yearText . '). ' . $titleText . '. ' . $institution . '.');
+                                        $institution = 'Santa Rita College of Pampanga';
+                                        // Build core strings
+                                        $citationCorePlain = trim(($authorsApa ? $authorsApa . '. ' : '') . '(' . $yearText . '). ' . $titleText . '. ' . $institution . '.');
                                         $docUrl = '';
                                         if (!empty($docPath)) {
                                             $docUrl = build_absolute_url($docPath);
                                         }
                                         // Plain text for copy textarea
-                                        $citationApa = $citationCore . ($docUrl ? ' ' . $docUrl : '');
-                                        // HTML for modal display with clickable URL
+                                        $citationApa = $citationCorePlain . ($docUrl ? ' ' . $docUrl : '');
+                                        // HTML for modal display (institution italicized to match journal-style look)
+                                        $authorsEsc = htmlspecialchars($authorsApa);
+                                        $titleEsc = htmlspecialchars($titleText);
+                                        $instEsc = htmlspecialchars($institution);
+                                        $citationCoreHtml = trim(($authorsEsc ? $authorsEsc . '. ' : '') . '(' . htmlspecialchars($yearText) . '). ' . $titleEsc . '. <i>' . $instEsc . '</i>.');
                                         if ($docUrl) {
-                                            $citationApaHtml = htmlspecialchars($citationCore) . ' <a href="' . htmlspecialchars($docUrl) . '" target="_blank" rel="noopener">' . htmlspecialchars($docUrl) . '</a>';
+                                            $citationApaHtml = $citationCoreHtml . ' <a href="' . htmlspecialchars($docUrl) . '" target="_blank" rel="noopener">' . htmlspecialchars($docUrl) . '</a>';
                                         } else {
-                                            $citationApaHtml = htmlspecialchars($citationCore);
+                                            $citationApaHtml = $citationCoreHtml;
                                         }
                                     ?>
                                     <!-- Cite Modal -->
@@ -948,49 +971,6 @@ try {
                     </div>
                 <?php endif; ?>
 
-                <!-- Pagination -->
-                <?php if ($total_pages > 1): ?>
-                <div class="mt-6 flex justify-center items-center gap-2">
-                    <?php if ($current_page > 1): ?>
-                        <a href="?page=1<?= isset($_GET['department']) ? '&department=' . htmlspecialchars($_GET['department']) : '' ?><?= (isset($_GET['academic_year']) ? '&academic_year=' . urlencode($_GET['academic_year']) : (isset($_GET['school_year']) ? '&academic_year=' . urlencode($_GET['school_year']) : '')) ?><?= isset($_GET['search']) ? '&search=' . urlencode($_GET['search']) : '' ?>" 
-                           class="px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
-                            <i class="fas fa-angle-double-left"></i>
-                        </a>
-                        <a href="?page=<?= $current_page - 1 ?><?= isset($_GET['department']) ? '&department=' . htmlspecialchars($_GET['department']) : '' ?><?= (isset($_GET['academic_year']) ? '&academic_year=' . urlencode($_GET['academic_year']) : (isset($_GET['school_year']) ? '&academic_year=' . urlencode($_GET['school_year']) : '')) ?><?= isset($_GET['search']) ? '&search=' . urlencode($_GET['search']) : '' ?>" 
-                           class="px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
-                            <i class="fas fa-angle-left"></i>
-                        </a>
-                    <?php endif; ?>
-
-                    <?php
-                    // Show up to 5 page numbers, centered around current page
-                    $start_page = max(1, min($current_page - 2, $total_pages - 4));
-                    $end_page = min($total_pages, max($current_page + 2, 5));
-
-                    for ($i = $start_page; $i <= $end_page; $i++):
-                    ?>
-                        <a href="?page=<?= $i ?><?= isset($_GET['department']) ? '&department=' . htmlspecialchars($_GET['department']) : '' ?><?= (isset($_GET['academic_year']) ? '&academic_year=' . urlencode($_GET['academic_year']) : (isset($_GET['school_year']) ? '&academic_year=' . urlencode($_GET['school_year']) : '')) ?><?= isset($_GET['search']) ? '&search=' . urlencode($_GET['search']) : '' ?>" 
-                           class="px-3 py-1 <?= $i === $current_page ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-700' ?> rounded hover:bg-blue-600 hover:text-white">
-                            <?= $i ?>
-                        </a>
-                    <?php endfor; ?>
-
-                    <?php if ($current_page < $total_pages): ?>
-                        <a href="?page=<?= $current_page + 1 ?><?= isset($_GET['department']) ? '&department=' . htmlspecialchars($_GET['department']) : '' ?><?= (isset($_GET['academic_year']) ? '&academic_year=' . urlencode($_GET['academic_year']) : (isset($_GET['school_year']) ? '&academic_year=' . urlencode($_GET['school_year']) : '')) ?><?= isset($_GET['search']) ? '&search=' . urlencode($_GET['search']) : '' ?>" 
-                           class="px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
-                            <i class="fas fa-angle-right"></i>
-                        </a>
-                        <a href="?page=<?= $total_pages ?><?= isset($_GET['department']) ? '&department=' . htmlspecialchars($_GET['department']) : '' ?><?= (isset($_GET['academic_year']) ? '&academic_year=' . urlencode($_GET['academic_year']) : (isset($_GET['school_year']) ? '&academic_year=' . urlencode($_GET['school_year']) : '')) ?><?= isset($_GET['search']) ? '&search=' . urlencode($_GET['search']) : '' ?>" 
-                           class="px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
-                            <i class="fas fa-angle-double-right"></i>
-                        </a>
-                    <?php endif; ?>
-
-                    <span class="ml-4 text-sm text-gray-600">
-                        Page <?= $current_page ?> of <?= $total_pages ?>
-                    </span>
-                </div>
-                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -1013,22 +993,110 @@ try {
         }
 
         const searchInput = document.getElementById('searchInput');
-        const cards = document.querySelectorAll('.paper-card');
+        const results = document.getElementById('results');
+        const cards = Array.from(results.querySelectorAll('.paper-card'));
+
+        // Cache original text contents to safely re-render highlights
+        function cacheOriginals() {
+            cards.forEach(card => {
+                const titleEl = card.querySelector('.paper-title');
+                const metaEl = card.querySelector('.paper-meta');
+                const absEl = card.querySelector('.paper-abstract');
+                const keywordEls = card.querySelectorAll('.inline-flex');
+
+                if (titleEl && !titleEl.dataset.orig) titleEl.dataset.orig = titleEl.textContent;
+                if (metaEl && !metaEl.dataset.orig) metaEl.dataset.orig = metaEl.textContent;
+                if (absEl && !absEl.dataset.orig) absEl.dataset.orig = absEl.textContent;
+                keywordEls.forEach((kEl) => {
+                    if (!kEl.dataset.orig) kEl.dataset.orig = kEl.textContent;
+                });
+            });
+        }
+
+        function escapeRegExp(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function highlightInElement(el, term) {
+            if (!el) return;
+            const orig = el.dataset.orig ?? el.textContent;
+            if (!term) {
+                el.innerHTML = '';
+                el.textContent = orig;
+                return;
+            }
+            const pattern = new RegExp(`(${escapeRegExp(term)})`, 'gi');
+            const safe = orig.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            el.innerHTML = safe.replace(pattern, '<mark class="search-hit">$1</mark>');
+        }
+
+        function applyHighlights(term) {
+            cards.forEach(card => {
+                const titleEl = card.querySelector('.paper-title');
+                const metaEl = card.querySelector('.paper-meta');
+                const absEl = card.querySelector('.paper-abstract');
+                const keywordEls = card.querySelectorAll('.inline-flex');
+                highlightInElement(titleEl, term);
+                highlightInElement(metaEl, term);
+                highlightInElement(absEl, term);
+                keywordEls.forEach(kEl => highlightInElement(kEl, term));
+            });
+        }
+
+        // Initialize caches once DOM is ready
+        cacheOriginals();
+        // If there is an initial search value (from URL), apply filtering and highlights immediately
+        (function initSearchOnce() {
+            if (!searchInput) return;
+            const term = searchInput.value.toLowerCase();
+            if (!term) return;
+            cards.forEach(card => {
+                const title = card.dataset.title;
+                const author = card.dataset.author ?? '';
+                const dept = card.dataset.department ?? '';
+                const course = card.dataset.courseStrand ?? card.dataset['course-strand'] ?? '';
+                const keywords = card.dataset.keywords ?? '';
+
+                if (
+                    (title && title.includes(term)) ||
+                    (author && author.includes(term)) ||
+                    (dept && dept.includes(term)) ||
+                    (course && course.includes(term)) ||
+                    (keywords && keywords.includes(term))
+                ) {
+                    card.style.display = '';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+            applyHighlights(searchInput.value.trim());
+        })();
 
         searchInput.addEventListener('input', function () {
             const term = this.value.toLowerCase();
 
             cards.forEach(card => {
                 const title = card.dataset.title;
-                const members = card.dataset.members;
-                const dept = card.dataset.department;
+                const author = card.dataset.author ?? '';
+                const dept = card.dataset.department ?? '';
+                const course = card.dataset.courseStrand ?? card.dataset['course-strand'] ?? '';
+                const keywords = card.dataset.keywords ?? '';
 
-                if (title.includes(term) || members.includes(term) || dept.includes(term)) {
+                if (
+                    (title && title.includes(term)) ||
+                    (author && author.includes(term)) ||
+                    (dept && dept.includes(term)) ||
+                    (course && course.includes(term)) ||
+                    (keywords && keywords.includes(term))
+                ) {
                     card.style.display = '';
                 } else {
                     card.style.display = 'none';
                 }
             });
+
+            // Apply visual highlight to visible cards
+            applyHighlights(this.value.trim());
         });
 
         // Citation modal helpers

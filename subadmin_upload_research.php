@@ -34,13 +34,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $title = trim($_POST['title']);
     $year = $_POST['year'];
     $abstract = trim($_POST['abstract']);
-    $members = trim($_POST['members']);
-    $department = $_POST['department'] ?? ($_POST['strand'] ?? 'BSIS');
+    $author = trim($_POST['author']);
+    $department = $_POST['department'] ?? ($_POST['strand'] ?? '');
+    $course_strand = trim($_POST['course_strand'] ?? '');
     $keywords = trim($_POST['keywords'] ?? '');
     $status = 1; // Approved
 
     // Validate required fields
-    if (empty($title) || empty($abstract) || empty($members)) {
+    if (empty($title) || empty($abstract) || empty($author)) {
         $message = "All fields are required.";
         $message_type = 'error';
     } else {
@@ -64,7 +65,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // Upload PDF document
+        // Upload PDF document (optional)
         if (!empty($_FILES['document']['name'])) {
             $docName = $_FILES['document']['name'];
             $docTmp = $_FILES['document']['tmp_name'];
@@ -82,16 +83,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Insert into database if no errors
         if (!$message) {
             try {
-                // Ensure keywords column exists
-                $ck = $conn->prepare("SHOW COLUMNS FROM research_submission LIKE 'keywords'");
-                $ck->execute();
-                if ($ck->rowCount() == 0) {
-                    $conn->exec("ALTER TABLE research_submission ADD COLUMN keywords VARCHAR(255) NULL AFTER abstract");
+                // Deduplicate title among approved books (case-insensitive)
+                $ck = $conn->prepare("SELECT book_id FROM books WHERE LOWER(TRIM(title)) = LOWER(TRIM(?)) AND status = 1");
+                $ck->execute([$title]);
+                if ($ck->fetch()) {
+                    throw new PDOException('A research with this title already exists in the repository. Please use a different title.');
                 }
-                $stmt = $conn->prepare("INSERT INTO research_submission 
-                    (title, year, abstract, keywords, members, department, status, image, document, submission_date) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
-                $stmt->execute([$title, $year, $abstract, $keywords, $members, $department, $status, $image, $document]);
+                // Insert into books; uploads by subadmin have no student_id
+                $adviser_id = $_SESSION['subadmin_id'] ?? null;
+                $stmt = $conn->prepare("INSERT INTO books 
+                    (student_id, adviser_id, title, year, abstract, keywords, authors, department, status, image, document, submission_date) 
+                    VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+                $stmt->execute([$adviser_id, $title, $year, $abstract, $keywords, $author, $department, $status, $image, $document]);
 
                 // Activity log
                 require_once __DIR__ . '/include/activity_log.php';
@@ -249,10 +252,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 <!-- Members -->
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Group Member Name(s) *</label>
-                    <textarea name="members" rows="2"
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Author(s) *</label>
+                    <textarea name="author" rows="2"
                               class="w-full px-3 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                              placeholder="Enter member names separated by commas" required><?= htmlspecialchars($_POST['members'] ?? '') ?></textarea>
+                              placeholder="Enter author names separated by commas" required><?= htmlspecialchars($_POST['author'] ?? '') ?></textarea>
                 </div>
 
                 <!-- Department & Status -->
@@ -297,13 +300,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Research Document (PDF) *</label>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Research Document (PDF) <span class=\"text-gray-400\">(Optional)</span></label>
                         <div class="relative">
                             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500">
                                 <i class="fas fa-file-pdf"></i>
                             </div>
                             <input type="file" name="document" accept=".pdf"
-                                   class="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl file:mr-4 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-600 hover:file:bg-blue-100 transition-all duration-200" required>
+                                   class="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl file:mr-4 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-600 hover:file:bg-blue-100 transition-all duration-200">
                         </div>
                     </div>
                 </div>

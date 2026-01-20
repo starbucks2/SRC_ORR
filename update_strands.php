@@ -9,52 +9,37 @@ try {
     ) ENGINE=InnoDB");
 
     // Insert default strands if they don't exist
-    $defaultStrands = ['HUMSS', 'STEM', 'TVL', 'GAS'];
+    $defaultStrands = ['ABM', 'HUMSS', 'STEM', 'TVL', 'GAS'];
     $insertStrand = $conn->prepare("INSERT IGNORE INTO strands (strand) VALUES (?)");
     foreach ($defaultStrands as $strand) {
         $insertStrand->execute([$strand]);
     }
 
-    // Add strand column to students table if it doesn't exist
-    $conn->exec("ALTER TABLE students ADD COLUMN IF NOT EXISTS strand VARCHAR(50)");
-    
-    // Add strand column to subadmins table if it doesn't exist
-    $conn->exec("ALTER TABLE subadmins ADD COLUMN IF NOT EXISTS strand VARCHAR(50)");
+    // Ensure students.course_strand column exists (canonical)
+    $conn->exec("ALTER TABLE students ADD COLUMN IF NOT EXISTS course_strand VARCHAR(50)");
 
     // Get list of strands for validation
     $strands = $conn->query("SELECT strand FROM strands")->fetchAll(PDO::FETCH_COLUMN);
     $validStrands = array_merge($strands, ['']);  // Allow empty strand as valid
 
-    // Update students with random strands if strand is NULL
-    $students = $conn->query("SELECT id FROM students WHERE strand IS NULL")->fetchAll(PDO::FETCH_COLUMN);
-    if (!empty($students)) {
-        $updateStudent = $conn->prepare("UPDATE students SET strand = ? WHERE id = ?");
+    // Optionally assign random strands to students missing course_strand
+    $students = $conn->query("SELECT student_id FROM students WHERE course_strand IS NULL OR course_strand = ''")->fetchAll(PDO::FETCH_COLUMN);
+    if (!empty($students) && !empty($strands)) {
+        $updateStudent = $conn->prepare("UPDATE students SET course_strand = ? WHERE student_id = ?");
         foreach ($students as $studentId) {
-            // Randomly assign a strand
             $randomStrand = $strands[array_rand($strands)];
             $updateStudent->execute([$randomStrand, $studentId]);
         }
     }
 
-    // Update subadmins with random strands if strand is NULL
-    $subadmins = $conn->query("SELECT id FROM subadmins WHERE strand IS NULL")->fetchAll(PDO::FETCH_COLUMN);
-    if (!empty($subadmins)) {
-        $updateSubadmin = $conn->prepare("UPDATE subadmins SET strand = ? WHERE id = ?");
-        foreach ($subadmins as $subadminId) {
-            // Randomly assign a strand
-            $randomStrand = $strands[array_rand($strands)];
-            $updateSubadmin->execute([$randomStrand, $subadminId]);
-        }
-    }
-
     echo "✅ Database updated successfully!<br>";
-    echo "Added strand columns to students and subadmins tables<br>";
-    echo "Assigned random strands to students and subadmins<br>";
+    echo "Ensured strands table and seeded defaults.<br>";
+    echo "Ensured students.course_strand column and filled empties where possible.<br>";
     echo "<br>Available strands:<br>";
     foreach ($strands as $strand) {
         echo "- " . htmlspecialchars($strand) . "<br>";
     }
-    echo "<br><a href='subadmin_announcements.php' class='text-blue-600 hover:text-blue-800'>Return to Announcements</a>";
+    echo "<br><a href='subadmin_dashboard.php' class='text-blue-600 hover:text-blue-800'>Return to Dashboard</a>";
 
 } catch (PDOException $e) {
     echo "❌ Error: " . $e->getMessage() . "<br>";

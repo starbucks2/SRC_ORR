@@ -5,29 +5,30 @@ include 'db.php';
 // Check if admin is logged in
 if (!isset($_SESSION['admin_id'])) {
     $_SESSION['error'] = "You must be logged in as an admin.";
-    header("Location: admin_login.php");
+    header("Location: login.php");
     exit();
 }
 
-// Ensure archive column exists
-try {
-    $chk = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sub_admins' AND COLUMN_NAME = 'is_archived'");
-    $chk->execute();
-    if ((int)$chk->fetchColumn() === 0) {
-        $conn->exec("ALTER TABLE sub_admins ADD COLUMN is_archived TINYINT(1) NOT NULL DEFAULT 0 AFTER permissions");
-    }
-} catch (Throwable $e) { /* ignore */ }
-
 // Handle archive action (instead of delete)
 if (isset($_GET['archive'])) {
-    $subadmin_id = (int)$_GET['archive'];
-    if ($subadmin_id <= 0) {
+    $subadmin_id = trim($_GET['archive']);
+    if ($subadmin_id === '') {
         $_SESSION['error'] = "Invalid sub-admin id.";
         header("Location: manage_subadmins.php");
         exit();
     }
     try {
-        $stmt = $conn->prepare("UPDATE sub_admins SET is_archived = 1 WHERE id = :id");
+        // Ensure is_archived column exists on employees
+        try {
+            $chk = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'is_archived'");
+            $chk->execute();
+            if ((int)$chk->fetchColumn() === 0) {
+                $conn->exec("ALTER TABLE employees ADD COLUMN is_archived TINYINT(1) NOT NULL DEFAULT 0");
+            }
+        } catch (Throwable $_) { /* best-effort */ }
+
+        // Archive using roles table (role_id 2=RESEARCH_ADVISER only)
+        $stmt = $conn->prepare("UPDATE employees SET is_archived = 1 WHERE employee_id = :id AND EXISTS (SELECT 1 FROM roles r WHERE r.employee_id = employees.employee_id AND r.role_id = 2)");
         $stmt->execute([':id' => $subadmin_id]);
         if ($stmt->rowCount() > 0) {
             $_SESSION['success'] = "Sub-admin archived successfully.";
@@ -41,8 +42,92 @@ if (isset($_GET['archive'])) {
     exit();
 }
 
-// Fetch active (non-archived) sub-admins
-$stmt = $conn->prepare("SELECT * FROM sub_admins WHERE COALESCE(is_archived,0) = 0 ORDER BY id DESC");
+// Fetch active (non-archived) sub-admins (Research Advisers)
+// Detect if the runtime DB has the `department` and `profile_pic` columns in `employees`
+try {
+    $colChk = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'department'");
+    $colChk->execute();
+    $hasDepartmentCol = ((int)$colChk->fetchColumn() > 0);
+} catch (Throwable $_) {
+    $hasDepartmentCol = false; // be safe
+}
+
+try {
+    $colChk2 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'profile_pic'");
+    $colChk2->execute();
+    $hasProfilePicCol = ((int)$colChk2->fetchColumn() > 0);
+} catch (Throwable $_) {
+    $hasProfilePicCol = false; // be safe
+}
+
+try {
+    $colChk3 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'is_archived'");
+    $colChk3->execute();
+    $hasIsArchivedCol = ((int)$colChk3->fetchColumn() > 0);
+} catch (Throwable $_) {
+    $hasIsArchivedCol = false; // be safe
+}
+
+// Detect created_at column
+try {
+    $colChk4 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'created_at'");
+    $colChk4->execute();
+    $hasCreatedAtCol = ((int)$colChk4->fetchColumn() > 0);
+} catch (Throwable $_) {
+    $hasCreatedAtCol = false; // be safe
+}
+
+// Detect role and employee_type columns for filtering
+try {
+    $colRole = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'role'");
+    $colRole->execute();
+    $hasRoleCol = ((int)$colRole->fetchColumn() > 0);
+} catch (Throwable $_) { $hasRoleCol = false; }
+try {
+    $colEmpType = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'employee_type'");
+    $colEmpType->execute();
+    $hasEmpTypeCol = ((int)$colEmpType->fetchColumn() > 0);
+} catch (Throwable $_) { $hasEmpTypeCol = false; }
+$roleCol = $hasRoleCol ? 'role' : 'employee_type';
+
+$strandSelect = $hasDepartmentCol ? "e.department AS strand" : "NULL AS strand";
+$profilePicSelect = $hasProfilePicCol ? "e.profile_pic" : "NULL AS profile_pic";
+
+// Build a safe fullname expression using only existing columns
+$firstCol = $middleCol = $lastCol = null;
+try {
+    $qCols = $conn->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees'");
+    $qCols->execute();
+    $cols = $qCols->fetchAll(PDO::FETCH_COLUMN, 0);
+    if (in_array('first_name', $cols, true)) { $firstCol = 'first_name'; }
+    elseif (in_array('firstname', $cols, true)) { $firstCol = 'firstname'; }
+    if (in_array('middle_name', $cols, true)) { $middleCol = 'middle_name'; }
+    elseif (in_array('middlename', $cols, true)) { $middleCol = 'middlename'; }
+    if (in_array('last_name', $cols, true)) { $lastCol = 'last_name'; }
+    elseif (in_array('lastname', $cols, true)) { $lastCol = 'lastname'; }
+} catch (Throwable $_) { /* leave nulls */ }
+$nameParts = [];
+if ($firstCol) { $nameParts[] = "e.`$firstCol`"; }
+if ($middleCol) { $nameParts[] = "NULLIF(e.`$middleCol`,'')"; }
+if ($lastCol) { $nameParts[] = "e.`$lastCol`"; }
+$nameExpr = !empty($nameParts) ? ("CONCAT_WS(' ', " . implode(', ', $nameParts) . ")") : "e.email";
+
+$createdAtSelect = $hasCreatedAtCol ? "e.created_at" : "NULL AS created_at";
+$orderBy = $hasCreatedAtCol ? "e.created_at DESC" : "e.employee_id DESC";
+
+// Fetch active (non-archived) sub-admins using roles table (role_id 2=RESEARCH_ADVISER only, not Deans)
+$sql = "SELECT 
+    e.employee_id AS id,
+    {$nameExpr} AS fullname,
+    e.email,
+    {$strandSelect},
+    {$createdAtSelect},
+    {$profilePicSelect}
+  FROM employees e
+  INNER JOIN roles r ON e.employee_id = r.employee_id
+  WHERE r.role_id = 2 AND " . ($hasIsArchivedCol ? "COALESCE(e.is_archived,0) = 0" : "1=1") . "
+  ORDER BY {$orderBy}";
+$stmt = $conn->prepare($sql);
 $stmt->execute();
 $subadmins = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
@@ -52,7 +137,7 @@ $subadmins = $stmt->fetchAll(PDO::FETCH_ASSOC);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manage Sub-Admins</title>
+    <title>Manage Research Adviser</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -66,10 +151,15 @@ $subadmins = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <main class="flex-1 p-4 sm:p-6 lg:p-10 w-full max-w-7xl mx-auto">
         <div class="bg-white rounded-lg shadow-md p-4 sm:p-6 lg:p-8">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-                <h2 class="text-2xl sm:text-3xl font-bold text-blue-900">Manage Sub-Admins</h2>
-                <a href="create_subadmin.php" class="inline-flex items-center justify-center bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 w-full sm:w-auto">
-                    <i class="fas fa-plus mr-2"></i> Create New
-                </a>
+                <h2 class="text-2xl sm:text-3xl font-bold text-blue-900">Manage Research Adviser</h2>
+                <div class="flex items-center gap-2 w-full sm:w-auto">
+                    <a href="archived_subadmins.php" class="inline-flex items-center justify-center bg-amber-600 text-white px-4 py-2 rounded-md hover:bg-amber-700 flex-1 sm:flex-none">
+                        <i class="fas fa-box-archive mr-2"></i> View Archived
+                    </a>
+                    <a href="create_subadmin.php" class="inline-flex items-center justify-center bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 flex-1 sm:flex-none">
+                        <i class="fas fa-plus mr-2"></i> Create New
+                    </a>
+                </div>
             </div>
             
             <!-- Success/Error Messages (SweetAlert2) -->

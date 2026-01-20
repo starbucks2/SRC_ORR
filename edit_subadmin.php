@@ -9,21 +9,63 @@ if (!isset($_SESSION['admin_id'])) {
     exit();
 }
 
-// Get sub-admin id
-$subadmin_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-if ($subadmin_id <= 0) {
-    $_SESSION['error'] = 'Invalid sub-admin ID.';
+// Get sub-admin id (may be employee_id string or numeric id)
+$param_id = isset($_GET['id']) ? trim($_GET['id']) : '';
+if ($param_id === '') {
+    $_SESSION['error'] = 'Invalid Research Adviser ID.';
     header('Location: manage_subadmins.php');
     exit();
 }
 
-// Fetch existing record
-$stmt = $conn->prepare("SELECT * FROM sub_admins WHERE id = ?");
-$stmt->execute([$subadmin_id]);
-$subadmin = $stmt->fetch(PDO::FETCH_ASSOC);
+// Fetch existing record from employees
+$subadmin = null;
+$allowedRoles = [
+    ['role_id'=>1,'role_name'=>'DEAN','display_name'=>'Dean'],
+    ['role_id'=>2,'role_name'=>'RESEARCH_ADVISER','display_name'=>'Research Adviser'],
+];
+try {
+    // Detect columns to build robust query
+    $cols = [];
+    try {
+        $qc = $conn->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees'");
+        $qc->execute();
+        $cols = $qc->fetchAll(PDO::FETCH_COLUMN, 0);
+    } catch (Throwable $_) { $cols = []; }
+    $hasIdCol = in_array('id', $cols, true);
+    $hasFirst = in_array('firstname', $cols, true) || in_array('first_name', $cols, true);
+    $hasLast  = in_array('lastname',  $cols, true) || in_array('last_name',  $cols, true);
+
+    if ($hasIdCol) {
+        $stmt = $conn->prepare("SELECT * FROM employees WHERE employee_id = ? OR id = ? LIMIT 1");
+        $stmt->execute([$param_id, $param_id]);
+    } else {
+        $stmt = $conn->prepare("SELECT * FROM employees WHERE employee_id = ? LIMIT 1");
+        $stmt->execute([$param_id]);
+    }
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row) {
+        // Derive fields used by the form
+        $fn = $row['firstname'] ?? ($row['first_name'] ?? '');
+        $ln = $row['lastname']  ?? ($row['last_name']  ?? '');
+        $fullname = trim($fn . ' ' . $ln);
+        $department = $row['department'] ?? ($row['strand'] ?? '');
+        // Determine current role textual value
+        $roleText = strtoupper(str_replace(' ', '_', trim((string)($row['role'] ?? ($row['employee_type'] ?? '')))));
+        $subadmin = [
+            'employee_id' => $row['employee_id'] ?? ($row['id'] ?? $param_id),
+            'fullname' => $fullname,
+            'email' => $row['email'] ?? '',
+            'profile_pic' => $row['profile_pic'] ?? '',
+            'strand' => $department,
+            'role_name' => ($roleText === 'DEAN' ? 'DEAN' : 'RESEARCH_ADVISER')
+        ];
+    }
+} catch (Throwable $e) {
+    $subadmin = null;
+}
 
 if (!$subadmin) {
-    $_SESSION['error'] = 'Sub-admin not found.';
+    $_SESSION['error'] = 'Research Adviser not found.';
     header('Location: manage_subadmins.php');
     exit();
 }
@@ -76,7 +118,7 @@ if (!$subadmin) {
 
             <div class="bg-white rounded-2xl shadow-xl p-4 sm:p-6 md:p-8 border border-gray-200">
                 <form action="update_subadmin.php" method="POST" enctype="multipart/form-data" class="space-y-6 sm:space-y-8">
-                    <input type="hidden" name="target_id" value="<?= $subadmin_id ?>">
+                    <input type="hidden" name="target_id" value="<?= htmlspecialchars($subadmin['employee_id']) ?>">
                     <div class="border-b border-gray-200 pb-6">
                         <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center"><i class="fas fa-user mr-3 text-blue-600"></i> Personal Information</h2>
                         <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -186,6 +228,21 @@ if (!$subadmin) {
                                 </div>
                                 <p class="text-xs text-gray-500 mt-1">The sub-admin will be assigned to manage students in this department.</p>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- Role Selection -->
+                    <div class="border-b border-gray-200 pb-6">
+                        <h2 class="text-xl font-semibold text-gray-800 mb-4 flex items-center"><i class="fas fa-id-badge mr-3 text-blue-600"></i> Role</h2>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Assign Role</label>
+                            <select name="role_name" class="w-full border rounded-lg px-3 py-2">
+                                <?php $currentRole = isset($_POST['role_name']) ? strtoupper(str_replace(' ','_',$_POST['role_name'])) : ($subadmin['role_name'] ?? 'RESEARCH_ADVISER'); ?>
+                                <?php foreach ($allowedRoles as $r): $rname = strtoupper($r['role_name']); ?>
+                                    <option value="<?= htmlspecialchars($r['role_name']) ?>" <?= ($currentRole === $rname ? 'selected' : '') ?>><?= htmlspecialchars($r['display_name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">Only Dean and Research Adviser are allowed.</p>
                         </div>
                     </div>
 

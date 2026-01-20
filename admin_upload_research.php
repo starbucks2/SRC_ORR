@@ -34,19 +34,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $title = trim($_POST['title']);
     $year = $_POST['year'];
     $abstract = trim($_POST['abstract']);
-    $members = trim($_POST['members']);
+    $author = trim($_POST['author']);
     // Use department field (replaces legacy 'strand')
     $department = trim($_POST['department'] ?? '');
+    $course_strand = trim($_POST['course_strand'] ?? '');
     $keywords = trim($_POST['keywords'] ?? '');
     $status = 1; // Approved
 
     // Validate required fields
-    if (empty($title) || empty($abstract) || empty($members) || empty($department)) {
+    if (empty($title) || empty($abstract) || empty($author) || empty($department)) {
         $message = "All fields are required.";
         $message_type = 'error';
     } else {
         $image = '';
         $document = '';
+
+        // Validate Department and Course/Strand against DB (Option C hybrid)
+        try {
+            require_once 'db.php';
+            $deptStmt = $conn->prepare("SELECT department_id, name, code, is_active FROM departments WHERE name = ? LIMIT 1");
+            $deptStmt->execute([$department]);
+            $deptRow = $deptStmt->fetch(PDO::FETCH_ASSOC);
+            if (!$deptRow || (int)$deptRow['is_active'] !== 1) {
+                $message = "Invalid department selected.";
+                $message_type = 'error';
+            } else {
+                $isSHS = (strtolower($deptRow['name']) === 'senior high school' || strtolower((string)$deptRow['code']) === 'shs');
+                if ($isSHS) {
+                    // Validate strand by name
+                    $sStmt = $conn->prepare("SELECT COUNT(*) FROM strands WHERE strand = ?");
+                    $sStmt->execute([$course_strand]);
+                    if ((int)$sStmt->fetchColumn() === 0) {
+                        $message = "Invalid strand selected.";
+                        $message_type = 'error';
+                    }
+                } else {
+                    // Validate course belongs to department
+                    $cStmt = $conn->prepare("SELECT COUNT(*) FROM courses WHERE department_id = ? AND course_name = ? AND is_active = 1");
+                    $cStmt->execute([(int)$deptRow['department_id'], $course_strand]);
+                    if ((int)$cStmt->fetchColumn() === 0) {
+                        $message = "Invalid course selected for the chosen department.";
+                        $message_type = 'error';
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            // If validation fails due to DB error, provide message
+            if (!$message) { $message = 'Validation error: ' . htmlspecialchars($e->getMessage()); $message_type = 'error'; }
+        }
 
         // Prepare upload directories
         $imgDir = __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'research_images';
@@ -89,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // Upload PDF document (required)
+        // Upload PDF document (optional)
         if (!empty($_FILES['document']['name'])) {
             if (isset($_FILES['document']['error']) && $_FILES['document']['error'] !== UPLOAD_ERR_OK) {
                 $message = 'Document upload error (code ' . (int)$_FILES['document']['error'] . ').';
@@ -106,11 +141,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($finfo) finfo_close($finfo);
 
                 if ($docExt === 'pdf' && ($mime === null || $mime === 'application/pdf') && $docSize < 25 * 1024 * 1024) {
-                    // Check if a research with same title exists
-                    $check_stmt = $conn->prepare("SELECT id FROM research_submission WHERE title = ? AND status = 1");
+                    // Check if a research with same title exists in books (case-insensitive)
+                    $check_stmt = $conn->prepare("SELECT book_id FROM books WHERE LOWER(TRIM(title)) = LOWER(TRIM(?)) AND status = 1");
                     $check_stmt->execute([$title]);
                     if ($check_stmt->rowCount() > 0) {
-                        $message = "A research with this title already exists.";
+                        $message = "A research with this title already exists in the repository. Please use a different title.";
                         $message_type = 'error';
                     } else {
                         // Create unique filename using timestamp and sanitized title
@@ -134,25 +169,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Insert into database if no errors
         if (!$message) {
-            // Ensure 'year' column can store Academic Year strings (e.g., 'S.Y. 2025-2026')
             try {
-                $ctype = $conn->prepare("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'research_submission' AND COLUMN_NAME = 'year'");
-                $ctype->execute();
-                $dt = strtolower((string)$ctype->fetchColumn());
-                if (in_array($dt, ['int','integer','tinyint','smallint','mediumint','bigint'])) {
-                    $conn->exec("ALTER TABLE research_submission MODIFY COLUMN year VARCHAR(32) NOT NULL");
-                }
-                // Ensure keywords column exists
-                $ck = $conn->prepare("SHOW COLUMNS FROM research_submission LIKE 'keywords'");
-                $ck->execute();
-                if ($ck->rowCount() == 0) {
-                    $conn->exec("ALTER TABLE research_submission ADD COLUMN keywords VARCHAR(255) NULL AFTER abstract");
-                }
-            } catch (Exception $e) { /* ignore schema adjustments */ }
-            try {
-                // For admin uploads, set student_id to NULL
-                $stmt = $conn->prepare("INSERT INTO research_submission (student_id, title, year, abstract, keywords, members, department, document, image, status, submission_date) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())");
-                $stmt->execute([$_POST['title'] ?? '', $_POST['year'] ?? '', $_POST['abstract'] ?? '', $keywords, $_POST['members'] ?? '', $department, $document, $image]);
+                // For admin uploads, set student_id to NULL and adviser_id to current admin
+                $adviser_id = $_SESSION['admin_id'] ?? null;
+                $stmt = $conn->prepare("INSERT INTO books (student_id, adviser_id, title, year, abstract, keywords, authors, department, course_strand, document, image, status) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)");
+                $stmt->execute([$adviser_id, $title, $year, $abstract, $keywords, $author, $department, $course_strand, $document, $image]);
 
                 // Activity log
                 require_once __DIR__ . '/include/activity_log.php';
@@ -179,7 +200,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Upload Research | BNHS Research Repository</title>
+    <title>Upload Research | SRC Research Repository</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
@@ -271,21 +292,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Academic Year *</label>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Academic/School Year *</label>
                         <div class="relative">
                             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500">
                                 <i class="fas fa-calendar"></i>
                             </div>
-                            <select name="year" class="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                                <?php
-                                    $currentYear = (int)date('Y');
-                                    for ($y = $currentYear; $y >= 2000; $y--) {
-                                        $next = $y + 1;
-                                        $sy = "A.Y. {$y}-{$next}";
-                                        $sel = (($_POST['year'] ?? '') === $sy) ? 'selected' : '';
-                                        echo '<option value="' . htmlspecialchars($sy, ENT_QUOTES) . '" ' . $sel . '>' . htmlspecialchars($sy) . '</option>';
-                                    }
-                                ?>
+                            <select name="year" id="year_select" class="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                <option value="">Loading years...</option>
                             </select>
                         </div>
                     </div>
@@ -310,26 +323,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 <!-- Members -->
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Group Member Name(s) *</label>
-                    <textarea name="members" rows="2"
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Author(s) *</label>
+                    <textarea name="author" rows="2"
                               class="w-full px-3 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                              placeholder="Enter member names separated by commas" required><?= htmlspecialchars($_POST['members'] ?? '') ?></textarea>
+                              placeholder="Enter author names separated by commas" required><?= htmlspecialchars($_POST['author'] ?? '') ?></textarea>
                 </div>
 
-                <!-- Department & Status -->
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Department, Course/Strand & Status -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Department *</label>
                         <div class="relative">
                             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500">
-                                <i class="fas fa-user-tag"></i>
+                                <i class="fas fa-building"></i>
                             </div>
-                            <select name="department" required class="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                                <option value="" disabled selected>Select Department</option>
-                                <option value="CCS">CCS (College of Computer Studies)</option>
-                                <option value="COE">COE (College of Education)</option>
-                                <option value="CBS">CBS (College of Business Studies)</option>
-                                <option value="Senior High School">Senior High School</option>
+                            <select name="department" id="department" required class="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                <option value="" selected>Select Department</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2"><span id="course_label">Course/Strand</span></label>
+                        <div class="relative">
+                            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500">
+                                <i class="fas fa-graduation-cap"></i>
+                            </div>
+                            <select name="course_strand" id="course_strand" class="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                <option value="">Select Course/Strand</option>
                             </select>
                         </div>
                     </div>
@@ -358,13 +378,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Research Document (PDF) *</label>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Research Document (PDF) <span class=\"text-gray-400\">(Optional)</span></label>
                         <div class="relative">
                             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500">
                                 <i class="fas fa-file-pdf"></i>
                             </div>
                             <input type="file" name="document" accept=".pdf"
-                                   class="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl file:mr-4 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-600 hover:file:bg-blue-100 transition-all duration-200" required>
+                                   class="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl file:mr-4 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-600 hover:file:bg-blue-100 transition-all duration-200">
                         </div>
                     </div>
                 </div>
@@ -377,5 +397,136 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </form>
         </section>
     </main>
+
+    <script>
+        // Dynamic Department and Course/Strand loading (DB-backed)
+        (function(){
+            const deptSel = document.getElementById('department');
+            const csSel = document.getElementById('course_strand');
+            const csLabel = document.getElementById('course_label');
+            const yearSel = document.getElementById('year_select');
+            const preselectedYear = <?= json_encode($_POST['year'] ?? '') ?>;
+
+            let cachedYearSpans = [];
+
+            function currentYearPrefixForDeptName(deptName) {
+                if (!deptName) return 'A.Y.'; // default
+                const dn = String(deptName).trim().toLowerCase();
+                // Senior High School => S.Y.
+                if (dn === 'senior high school' || dn === 'shs') return 'S.Y.';
+                // CCS, COE, CBS and others => A.Y.
+                return 'A.Y.';
+            }
+
+            function rebuildYearOptions(prefix) {
+                yearSel.innerHTML = '';
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = 'Select ' + (prefix === 'S.Y.' ? 'School' : 'Academic') + ' Year';
+                placeholder.disabled = true;
+                placeholder.selected = true;
+                yearSel.appendChild(placeholder);
+
+                cachedYearSpans.forEach(span => {
+                    const full = `${prefix} ${span}`;
+                    const opt = document.createElement('option');
+                    opt.value = full;
+                    opt.textContent = full;
+                    if (preselectedYear && preselectedYear === full) opt.selected = true;
+                    yearSel.appendChild(opt);
+                });
+            }
+
+            async function loadAcademicYears(){
+                try {
+                    const res = await fetch('include/get_academic_years.php');
+                    const json = await res.json();
+                    if (!json.ok) throw new Error(json.error || 'Failed to load years');
+                    cachedYearSpans = json.data.map(r => r.span);
+                    const opt = deptSel.options[deptSel.selectedIndex];
+                    const deptName = opt ? opt.value : '';
+                    const prefix = currentYearPrefixForDeptName(deptName);
+                    rebuildYearOptions(prefix);
+                } catch(e) {
+                    console.error(e);
+                    yearSel.innerHTML = '<option value="">Failed to load years</option>';
+                }
+            }
+
+            async function loadDepartments(){
+                try {
+                    const res = await fetch('include/get_departments.php');
+                    const json = await res.json();
+                    if (!json.ok) throw new Error(json.error || 'Failed to load departments');
+                    const keep = deptSel.value;
+                    deptSel.innerHTML = '<option value="">Select Department</option>';
+                    json.data.forEach(d => {
+                        const opt = document.createElement('option');
+                        opt.value = d.name;
+                        opt.textContent = d.name;
+                        opt.dataset.deptId = d.id;
+                        if (keep && d.name === keep) opt.selected = true;
+                        deptSel.appendChild(opt);
+                    });
+                } catch(e) { console.error(e); }
+            }
+
+            async function loadStrands(){
+                try {
+                    const res = await fetch('include/get_strands.php');
+                    const json = await res.json();
+                    if (!json.ok) throw new Error(json.error || 'Failed to load strands');
+                    csSel.innerHTML = '<option value="">Select Strand</option>';
+                    json.data.forEach(s => {
+                        const opt = document.createElement('option');
+                        opt.value = s.strand;
+                        opt.textContent = s.strand;
+                        csSel.appendChild(opt);
+                    });
+                } catch(e) { console.error(e); }
+            }
+
+            async function loadCoursesForDepartmentId(deptId){
+                try {
+                    const res = await fetch('include/get_courses.php?department_id=' + encodeURIComponent(deptId));
+                    const json = await res.json();
+                    if (!json.ok) throw new Error(json.error || 'Failed to load courses');
+                    csSel.innerHTML = '<option value="">Select Course</option>';
+                    json.data.forEach(c => {
+                        const opt = document.createElement('option');
+                        opt.value = c.name;
+                        opt.textContent = c.name + (c.code ? ` (${c.code})` : '');
+                        csSel.appendChild(opt);
+                    });
+                } catch(e) { console.error(e); }
+            }
+
+            async function onDepartmentChange(){
+                const opt = deptSel.options[deptSel.selectedIndex];
+                const deptId = opt ? opt.dataset.deptId : '';
+                const deptName = opt ? opt.value : '';
+                if (!deptId) {
+                    csLabel.textContent = 'Course/Strand';
+                    csSel.innerHTML = '<option value="">Select Course/Strand</option>';
+                    // Also refresh year prefix to default when no department
+                    rebuildYearOptions(currentYearPrefixForDeptName(''));
+                    return;
+                }
+                if (deptName.toLowerCase() === 'senior high school') {
+                    csLabel.textContent = 'Strand';
+                    await loadStrands();
+                } else {
+                    csLabel.textContent = 'Course';
+                    await loadCoursesForDepartmentId(deptId);
+                }
+                // Update year options prefix according to department
+                rebuildYearOptions(currentYearPrefixForDeptName(deptName));
+            }
+
+            // Load all data
+            Promise.all([loadDepartments(), loadAcademicYears()]).then(onDepartmentChange);
+            deptSel.addEventListener('change', onDepartmentChange);
+        })();
+    </script>
 </body>
 </html>

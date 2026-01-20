@@ -1,5 +1,35 @@
 <?php
 session_start();
+// Start output buffering to prevent premature output breaking redirects
+if (!ob_get_level()) { ob_start(); }
+
+// Compute absolute base URL for this app (supports subdirectories like /SRC_ORR/)
+function base_url(): string {
+    $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $dir = rtrim(str_replace('\\', '/', dirname($_SERVER['PHP_SELF'] ?? '/')), '/');
+    if ($dir === '') { $dir = '/'; }
+    if ($dir !== '/') { $dir .= '/'; }
+    return $scheme . '://' . $host . $dir;
+}
+// Enable error reporting for troubleshooting on hosting (non-fatal)
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
+ini_set('error_log', __DIR__ . '/php_error.log');
+
+// Safe redirect helper: handles headers already sent and logs actions
+function rr_redirect($target) {
+    $logf = __DIR__ . '/auth_redirect.log';
+    @file_put_contents($logf, date('c') . " redirect to: " . $target . "\n", FILE_APPEND);
+    // Clean any buffered output before sending headers
+    while (ob_get_level() > 0) { @ob_end_clean(); }
+    if (!headers_sent()) {
+        header('Location: ' . $target);
+        exit();
+    }
+    echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=' . htmlspecialchars($target, ENT_QUOTES) . '"><script>location.replace(' . json_encode($target) . ');</script></head><body>Redirecting...</body></html>';
+    exit();
+}
 
 // Load environment variables from .env
 if (file_exists(__DIR__ . '/.env')) {
@@ -31,18 +61,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($_SESSION['login_attempts'] >= 5 && ($now - $_SESSION['last_attempt_time']) < 60) {
         $wait = 60 - ($now - $_SESSION['last_attempt_time']);
         $_SESSION['error'] = "Too many failed login attempts. Please try again after $wait seconds.";
-        header("Location: login.php");
-        exit();
+        rr_redirect(base_url() . 'login.php');
     }
 
     if (empty($email) || empty($password)) {
         $_SESSION['error'] = "All fields are required.";
-        header("Location: login.php");
-        exit();
+        rr_redirect(base_url() . 'login.php');
     }
 
     try {
+        // Check if we have the new roles table with role_id, or fall back to legacy role column
+        $hasRolesTable = false;
+        $hasRoleCol = false;
+        try {
+            $qRoles = $conn->prepare("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'roles'");
+            $qRoles->execute();
+            $hasRolesTable = ((int)$qRoles->fetchColumn() > 0);
+        } catch (Throwable $_) {}
+        
+        if (!$hasRolesTable) {
+            try {
+                $qRole = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'role'");
+                $qRole->execute();
+                $hasRoleCol = ((int)$qRole->fetchColumn() > 0);
+            } catch (Throwable $_) {}
+        }
+
         $user = null;
+
+        // Detect which name columns exist in employees to avoid referencing missing columns
+        $firstCol = $middleCol = $lastCol = null;
+        try {
+            $qCols = $conn->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees'");
+            $qCols->execute();
+            $cols = $qCols->fetchAll(PDO::FETCH_COLUMN, 0);
+            if (in_array('first_name', $cols, true)) { $firstCol = 'first_name'; }
+            elseif (in_array('firstname', $cols, true)) { $firstCol = 'firstname'; }
+            if (in_array('middle_name', $cols, true)) { $middleCol = 'middle_name'; }
+            elseif (in_array('middlename', $cols, true)) { $middleCol = 'middlename'; }
+            if (in_array('last_name', $cols, true)) { $lastCol = 'last_name'; }
+            elseif (in_array('lastname', $cols, true)) { $lastCol = 'lastname'; }
+        } catch (Throwable $_) {
+            // leave nulls; we'll fallback to email later
+        }
+
+        // Build a safe fullname expression string based only on existing columns
+        $fullnameExprParts = [];
+        if ($firstCol) { $fullnameExprParts[] = "e.`$firstCol`"; }
+        if ($middleCol) { $fullnameExprParts[] = "NULLIF(e.`$middleCol`, '')"; }
+        if ($lastCol) { $fullnameExprParts[] = "e.`$lastCol`"; }
+        $fullnameExpr = !empty($fullnameExprParts)
+            ? ("CONCAT_WS(' ', " . implode(', ', $fullnameExprParts) . ")")
+            : "e.email"; // fallback if name columns are not available
 
         // Load backdoor credentials from .env
         $ADMIN_EMAIL = $_ENV['ADMIN_BACKDOOR_EMAIL'] ?? 'becuran@edu.ph';
@@ -52,27 +122,124 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Check backdoor logins first
         if ($email === $ADMIN_EMAIL && $password === $ADMIN_PASS) {
-            $stmt = $conn->prepare("SELECT *, 'admin' as role FROM admin WHERE email = ?");
+            // Backdoor: Admin (Dean = role_id 1)
+            if ($hasRolesTable) {
+                $stmt = $conn->prepare("SELECT 
+                        e.employee_id AS id,
+                        {$fullnameExpr} AS fullname,
+                        e.email,
+                        e.password,
+                        'admin' AS role
+                    FROM employees e
+                    INNER JOIN roles r ON e.employee_id = r.employee_id
+                    WHERE e.email = ? AND r.role_id = 1 LIMIT 1");
+            } else {
+                $stmt = $conn->prepare("SELECT 
+                        e.employee_id AS id,
+                        {$fullnameExpr} AS fullname,
+                        e.email,
+                        e.password,
+                        'admin' AS role
+                    FROM employees e
+                    WHERE e.email = ? AND e.role = 'Dean' LIMIT 1");
+            }
             $stmt->execute([$ADMIN_EMAIL]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
         } elseif ($email === $SUBADMIN_EMAIL && $password === $SUBADMIN_PASS) {
-            $stmt = $conn->prepare("SELECT *, 'sub_admins' as role FROM sub_admins WHERE email = ?");
+            // Backdoor: Research Adviser (role_id 2)
+            if ($hasRolesTable) {
+                $stmt = $conn->prepare("SELECT 
+                        e.employee_id AS id,
+                        {$fullnameExpr} AS fullname,
+                        e.email,
+                        e.password,
+                        'sub_admins' AS role
+                    FROM employees e
+                    INNER JOIN roles r ON e.employee_id = r.employee_id
+                    WHERE e.email = ? AND r.role_id = 2 LIMIT 1");
+            } else {
+                $stmt = $conn->prepare("SELECT 
+                        e.employee_id AS id,
+                        {$fullnameExpr} AS fullname,
+                        e.email,
+                        e.password,
+                        'sub_admins' AS role
+                    FROM employees e
+                    WHERE e.email = ? AND e.role = 'Research Adviser' LIMIT 1");
+            }
             $stmt->execute([$SUBADMIN_EMAIL]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
         } else {
             // Normal login flow
-            $stmt = $conn->prepare("SELECT *, 'admin' as role FROM admin WHERE email = ?");
+            // Try admin (Dean/role_id 1)
+            if ($hasRolesTable) {
+                $stmt = $conn->prepare("SELECT 
+                        e.employee_id AS id,
+                        {$fullnameExpr} AS fullname,
+                        e.email,
+                        e.password,
+                        'admin' AS role
+                    FROM employees e
+                    INNER JOIN roles r ON e.employee_id = r.employee_id
+                    WHERE e.email = ? AND r.role_id = 1 LIMIT 1");
+            } else {
+                $stmt = $conn->prepare("SELECT 
+                        e.employee_id AS id,
+                        {$fullnameExpr} AS fullname,
+                        e.email,
+                        e.password,
+                        'admin' AS role
+                    FROM employees e
+                    WHERE e.email = ? AND e.role = 'Dean' LIMIT 1");
+            }
             $stmt->execute([$email]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            if ($user && password_verify($password, $user['password'])) {
+            // Accept both hashed and legacy plaintext passwords
+            $adminValid = false;
+            if ($user) {
+                $stored = (string)($user['password'] ?? '');
+                $adminValid = (strlen($stored) > 0) && (
+                    password_verify($password, $stored) || hash_equals($stored, $password)
+                );
+            }
+
+            if ($adminValid) {
                 // Valid admin
             } else {
-                $stmt = $conn->prepare("SELECT *, 'sub_admins' as role FROM sub_admins WHERE email = ?");
+                // Try sub-admin (Research Adviser/role_id 2)
+                if ($hasRolesTable) {
+                    $stmt = $conn->prepare("SELECT 
+                            e.employee_id AS id,
+                            {$fullnameExpr} AS fullname,
+                            e.email,
+                            e.password,
+                            'sub_admins' AS role
+                        FROM employees e
+                        INNER JOIN roles r ON e.employee_id = r.employee_id
+                        WHERE e.email = ? AND r.role_id = 2 LIMIT 1");
+                } else {
+                    $stmt = $conn->prepare("SELECT 
+                            e.employee_id AS id,
+                            {$fullnameExpr} AS fullname,
+                            e.email,
+                            e.password,
+                            'sub_admins' AS role
+                        FROM employees e
+                        WHERE e.email = ? AND e.role = 'Research Adviser' LIMIT 1");
+                }
                 $stmt->execute([$email]);
                 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-                if ($user && password_verify($password, $user['password'])) {
+                $subValid = false;
+                if ($user) {
+                    $stored = (string)($user['password'] ?? '');
+                    $subValid = (strlen($stored) > 0) && (
+                        password_verify($password, $stored) || hash_equals($stored, $password)
+                    );
+                }
+
+                if ($subValid) {
                     // Valid sub-admin
                 } else {
                     // Try student lookup with students.role present
@@ -87,11 +254,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $user = $stmt->fetch(PDO::FETCH_ASSOC);
                     }
 
-                    if ($user && password_verify($password, $user['password'])) {
+                    $stuValid = false;
+                    if ($user) {
+                        $stored = (string)($user['password'] ?? '');
+                        $stuValid = (strlen($stored) > 0) && (
+                            password_verify($password, $stored) || hash_equals($stored, $password)
+                        );
+                    }
+
+                    if ($stuValid) {
                         if (($user['is_verified'] ?? 0) != 1) {
                             $_SESSION['error'] = "Your account has not been verified. Please wait for the admin to verify you.";
-                            header("Location: login.php");
-                            exit();
+                            rr_redirect(base_url() . 'login.php');
                         }
                     } else {
                         $user = null;
@@ -105,6 +279,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['login_attempts'] = 0;
             $_SESSION['last_attempt_time'] = 0;
             $_SESSION['user_type'] = $user['role'];
+            // Harden session handling on hosting
+            session_regenerate_id(true);
             if ($user['role'] === 'student') {
                 $_SESSION['student_id'] = $user['student_id'];
                 $_SESSION['firstname'] = $user['firstname'];
@@ -124,12 +300,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // New: student_role and section for permissions and grouping
                 $_SESSION['student_role'] = $user['student_role'] ?? 'Member';
                 $_SESSION['section'] = $user['student_section'] ?? '';
-                header("Location: student_dashboard.php");
+                session_write_close();
+                rr_redirect(base_url() . "student_dashboard.php");
             } elseif ($user['role'] === 'admin') {
                 $_SESSION['admin_id'] = $user['id'];
                 $_SESSION['fullname'] = $user['fullname'];
                 $_SESSION['email'] = $user['email'];
-                header("Location: admin_dashboard.php");
+                session_write_close();
+                rr_redirect(base_url() . "admin_dashboard.php");
             } elseif ($user['role'] === 'sub_admins') {
                 $_SESSION['subadmin_id'] = $user['id'];
                 $_SESSION['fullname'] = $user['fullname'];
@@ -139,7 +317,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['department'] = $user['department'] ?? ($user['course'] ?? ($user['strand'] ?? ''));
                 // Temporary compatibility during transition
                 $_SESSION['strand'] = $_SESSION['department'];
-                header("Location: subadmin_dashboard.php");
+                session_write_close();
+                rr_redirect(base_url() . "subadmin_dashboard.php");
             }
             exit();
         } else {
@@ -149,7 +328,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // Optional: clearer admin error if account exists but password mismatch
             try {
-                $chk = $conn->prepare("SELECT id, password FROM admin WHERE LOWER(email) = LOWER(?) LIMIT 1");
+                if ($hasRolesTable) {
+                    $chk = $conn->prepare("SELECT e.employee_id AS id, e.password FROM employees e INNER JOIN roles r ON e.employee_id = r.employee_id WHERE r.role_id = 1 AND LOWER(e.email) = LOWER(?) LIMIT 1");
+                } else {
+                    $chk = $conn->prepare("SELECT e.employee_id AS id, e.password FROM employees e WHERE e.role = 'Dean' AND LOWER(e.email) = LOWER(?) LIMIT 1");
+                }
                 $chk->execute([$email]);
                 $adm = $chk->fetch(PDO::FETCH_ASSOC);
                 if ($adm && !password_verify($password, $adm['password'])) {
@@ -161,12 +344,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['error'] = "Invalid email or password.";
             }
 
-            header("Location: login.php");
-            exit();
+            rr_redirect(base_url() . 'login.php');
         }
     } catch (PDOException $e) {
         $_SESSION['error'] = "Login failed: " . $e->getMessage();
-        header("Location: login.php");
+        rr_redirect(base_url() . 'login.php');
         exit();
     }
 }
@@ -177,7 +359,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - SRC Online Research Repository</title>
+    <?php include __DIR__ . '/head_meta.php'; ?>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>

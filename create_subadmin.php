@@ -11,14 +11,23 @@ if (!isset($_SESSION['admin_id'])) {
     exit();
 }
 
+// Fixed roles: 1=DEAN, 2=RESEARCH_ADVISER (no role_definitions table)
+$allowedRoles = [
+    ['role_id' => 1, 'role_name' => 'DEAN', 'display_name' => 'Dean'],
+    ['role_id' => 2, 'role_name' => 'RESEARCH_ADVISER', 'display_name' => 'Research Adviser'],
+];
+
     // Check if form is submitted
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $fullname = trim($_POST['fullname']);
+    $first_name = trim($_POST['first_name'] ?? '');
+    $last_name = trim($_POST['last_name'] ?? '');
     $email = trim($_POST['email']);
     $password = $_POST['password'];
     $confirm_password = $_POST['confirm_password'];
     $department = $_POST['department'];
     $profilePicName = null;
+    $role_name = isset($_POST['role_name']) ? strtoupper(str_replace(' ', '_', trim($_POST['role_name']))) : 'RESEARCH_ADVISER';
+    $allowedRoleNames = array_map(function($r){ return strtoupper($r['role_name']); }, $allowedRoles);
     
     // Since all permissions are checked by default, we'll use the default permissions
     // No need to check selected permissions since we want all permissions active
@@ -34,9 +43,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     // Validate inputs
     $errors = [];
 
-    if (empty($fullname)) {
-        $errors[] = "Fullname is required";
-    }
+    if ($first_name === '') { $errors[] = "First name is required"; }
+    if ($last_name === '') { $errors[] = "Last name is required"; }
     
     if (empty($email)) {
         $errors[] = "Email is required";
@@ -54,11 +62,33 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $errors[] = "Passwords do not match";
     }
     
+    // Validate role selection
+    if (!in_array($role_name, $allowedRoleNames, true)) {
+        $errors[] = "Invalid role. Please choose Dean or Research Adviser.";
+    }
+
     // No need to check for empty permissions as they are automatically assigned
 
-    // Check if fullname or email already exists
-    $stmt = $conn->prepare("SELECT * FROM sub_admins WHERE fullname = ? OR email = ?");
-    $stmt->execute([$fullname, $email]);
+    // Detect which name columns exist in employees to avoid referencing missing columns
+    $firstCol = $lastCol = null;
+    try {
+        $qCols = $conn->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees'");
+        $qCols->execute();
+        $cols = $qCols->fetchAll(PDO::FETCH_COLUMN, 0);
+        if (in_array('first_name', $cols, true)) { $firstCol = 'first_name'; }
+        elseif (in_array('firstname', $cols, true)) { $firstCol = 'firstname'; }
+        if (in_array('last_name', $cols, true)) { $lastCol = 'last_name'; }
+        elseif (in_array('lastname', $cols, true)) { $lastCol = 'lastname'; }
+    } catch (Throwable $_) { /* leave nulls */ }
+    // Build a safe fullname expression
+    $nameExpr = ($firstCol && $lastCol)
+        ? ("TRIM(CONCAT_WS(' ', `$firstCol`, `$lastCol`))")
+        : "email"; // fallback
+
+    // Check if fullname (first/last) or email already exists among employees (regardless of role)
+    $displayFullname = trim($first_name . ' ' . $last_name);
+    $stmt = $conn->prepare("SELECT employee_id FROM employees WHERE (({$nameExpr}) = ? OR email = ?)");
+    $stmt->execute([$displayFullname, $email]);
     if ($stmt->rowCount() > 0) {
         $errors[] = "Fullname or email already exists";
     }
@@ -106,61 +136,100 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (empty($errors)) {
         $hashed_password = password_hash($password, PASSWORD_DEFAULT);
         $permissions_json = json_encode($permissions);
-        
+
         try {
-            // Ensure required columns exist (best-effort on hosting)
-            // permissions column
-            try {
-                $chkPerm = $conn->prepare("SHOW COLUMNS FROM sub_admins LIKE 'permissions'");
-                $chkPerm->execute();
-                if ($chkPerm->rowCount() == 0) {
-                    $conn->exec("ALTER TABLE sub_admins ADD COLUMN permissions TEXT NULL AFTER password");
-                }
-            } catch (Exception $e) { /* ignore */ }
+            // Use provided name parts (no middle name)
+            $first = $first_name;
+            $last = $last_name;
 
-            // department column (replaces legacy 'strand')
+            // Generate employee_id as numeric, zero-padded (e.g., 001, 002, ...)
+            // We compute next numeric ID among rows whose employee_id is all digits to avoid hex IDs.
+            $employee_id = '001';
             try {
-                $chkDept = $conn->prepare("SHOW COLUMNS FROM sub_admins LIKE 'department'");
-                $chkDept->execute();
-                if ($chkDept->rowCount() == 0) {
-                    $conn->exec("ALTER TABLE sub_admins ADD COLUMN department VARCHAR(50) NULL AFTER permissions");
-                }
-            } catch (Exception $e) { /* ignore */ }
-            // Best-effort migration: copy legacy strand -> department where empty
-            try {
-                $conn->exec("UPDATE sub_admins SET department = strand WHERE (department IS NULL OR department = '') AND strand IS NOT NULL");
-            } catch (Exception $e) { /* ignore */ }
+                $mx = $conn->query("SELECT MAX(CAST(employee_id AS UNSIGNED)) AS max_id FROM employees WHERE employee_id REGEXP '^[0-9]+$'");
+                $row = $mx->fetch(PDO::FETCH_ASSOC);
+                $next = (int)($row['max_id'] ?? 0) + 1;
+                $employee_id = str_pad((string)$next, 3, '0', STR_PAD_LEFT);
+            } catch (Throwable $_) { /* fallback keeps '001' */ }
 
-            // Ensure profile_pic column exists
-            $hasProfilePic = false;
+            // Insert into employees as Research Adviser (robust to missing columns)
             try {
-                $chk = $conn->prepare("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sub_admins' AND COLUMN_NAME = 'profile_pic'");
-                $chk->execute();
-                $hasProfilePic = (bool)$chk->fetchColumn();
-            } catch (Exception $e) {
-                $hasProfilePic = false;
-            }
-            if (!$hasProfilePic) {
+                // Detect optional columns for department, permissions, and profile_pic
+                $hasDeptCol = $hasPermCol = $hasPicCol = false;
                 try {
-                    $conn->exec("ALTER TABLE sub_admins ADD COLUMN profile_pic VARCHAR(255) NULL AFTER department");
-                    $hasProfilePic = true;
-                } catch (Exception $e) {
-                    // If altering table fails, continue without profile_pic
-                    $hasProfilePic = false;
+                    $qDept = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'department'");
+                    $qDept->execute();
+                    $hasDeptCol = ((int)$qDept->fetchColumn() > 0);
+                } catch (Throwable $_) { $hasDeptCol = false; }
+                try {
+                    $qPerm = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'permissions'");
+                    $qPerm->execute();
+                    $hasPermCol = ((int)$qPerm->fetchColumn() > 0);
+                } catch (Throwable $_) { $hasPermCol = false; }
+                try {
+                    $qPic = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'profile_pic'");
+                    $qPic->execute();
+                    $hasPicCol = ((int)$qPic->fetchColumn() > 0);
+                } catch (Throwable $_) { $hasPicCol = false; }
+
+                // Build columns/values
+                $cols = ['employee_id'];
+                $vals = [$employee_id];
+                if ($firstCol) { $cols[] = $firstCol; $vals[] = $first; }
+                if ($lastCol)  { $cols[] = $lastCol;  $vals[] = $last; }
+                $cols[] = 'email';    $vals[] = $email;
+                $cols[] = 'password'; $vals[] = $hashed_password;
+                // If role_id column exists on employees, set it using fixed role ids
+                try {
+                    $hasRoleIdCol = false;
+                    $qRID = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'role_id'");
+                    $qRID->execute();
+                    $hasRoleIdCol = ((int)$qRID->fetchColumn() > 0);
+                    if ($hasRoleIdCol) {
+                        $rid = ($role_name === 'DEAN') ? 1 : 2;
+                        $cols[] = 'role_id'; $vals[] = $rid;
+                    }
+                } catch (Throwable $_) { /* ignore */ }
+                if ($hasDeptCol) { $cols[] = 'department'; $vals[] = $department; }
+                if ($hasPermCol) { $cols[] = 'permissions'; $vals[] = $permissions_json; }
+                if ($hasPicCol && $profilePicName) { $cols[] = 'profile_pic'; $vals[] = $profilePicName; }
+
+                $placeholders = rtrim(str_repeat('?,', count($cols)), ',');
+                $sql = "INSERT INTO employees (" . implode(',', $cols) . ") VALUES ($placeholders)";
+                $stmt = $conn->prepare($sql);
+                // Retry on duplicate id
+                $attempts = 0;
+                while (true) {
+                    try {
+                        $stmt->execute($vals);
+                        break;
+                    } catch (PDOException $e) {
+                        if ($e->getCode() === '23000' && strpos($e->getMessage(), 'employee_id') !== false && $attempts < 5) {
+                            $num = (int)preg_replace('/\D/', '', $employee_id);
+                            $num = max(0, $num) + 1;
+                            $employee_id = str_pad((string)$num, 3, '0', STR_PAD_LEFT);
+                            $vals[0] = $employee_id;
+                            $attempts++;
+                            continue;
+                        }
+                        throw $e;
+                    }
                 }
-            }
 
-            if ($hasProfilePic) {
-                $stmt = $conn->prepare("INSERT INTO sub_admins (fullname, email, password, permissions, department, profile_pic) VALUES (?, ?, ?, ?, ?, ?)");
-                $stmt->execute([$fullname, $email, $hashed_password, $permissions_json, $department, $profilePicName]);
-            } else {
-                $stmt = $conn->prepare("INSERT INTO sub_admins (fullname, email, password, permissions, department) VALUES (?, ?, ?, ?, ?)");
-                $stmt->execute([$fullname, $email, $hashed_password, $permissions_json, $department]);
-            }
+                // Upsert mapping into roles table (employee_id -> role_id) fixed ids
+                try {
+                    $rid = ($role_name === 'DEAN') ? 1 : 2;
+                    $conn->prepare("INSERT INTO roles (employee_id, role_id, role_name, display_name, is_active) VALUES (?, ?, ?, ?, 1) ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), role_name = VALUES(role_name), display_name = VALUES(display_name), is_active = VALUES(is_active)")
+                         ->execute([$employee_id, $rid, ($rid===1?'DEAN':'RESEARCH_ADVISER'), ($rid===1?'Dean':'Research Adviser')]);
+                } catch (Throwable $_) { /* ignore silently */ }
 
-            $_SESSION['success'] = "Sub-admin created successfully!";
-            header("Location: manage_subadmins.php");
-            exit();
+                // Success only after insert
+                $_SESSION['success'] = "Sub-admin created successfully!";
+                header("Location: manage_subadmins.php");
+                exit();
+            } catch (PDOException $e) {
+                throw $e;
+            }
         } catch (PDOException $e) {
             $errors[] = "Database error: " . $e->getMessage();
         }
@@ -173,7 +242,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Create Sub-Admin - Admin Panel</title>
+    <title>Create Research Adviser - Admin Panel</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -205,7 +274,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
                 <div>
                     <h1 class="text-2xl sm:text-3xl font-bold text-blue-900 flex items-center">
-                        <i class="fas fa-user-plus mr-3"></i> Create Sub-Admin
+                        <i class="fas fa-user-plus mr-3"></i> Create Research Adviser
                     </h1>
                     <p class="text-sm sm:text-base text-gray-600 mt-1">Add a new sub-administrator with custom permissions</p>
                 </div>
@@ -315,23 +384,39 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                     </div>
                                 </div>
                             </div>
-                            <!--Fullname -->
+                            <!-- First Name -->
                             <div class="order-2">
                                 <label class="block text-sm font-medium text-gray-700 mb-2">
-                                    <i class="fas fa-user-tag mr-1"></i> Fullname
+                                    <i class="fas fa-user mr-1"></i> First Name
                                 </label>
                                 <div class="relative">
                                     <div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-500">
                                         <i class="fas fa-user"></i>
                                     </div>
-                                    <input type="text" name="fullname" 
-                                           value="<?php echo isset($_POST['fullname']) ? htmlspecialchars($_POST['fullname']) : ''; ?>" 
+                                    <input type="text" name="first_name"
+                                           value="<?php echo isset($_POST['first_name']) ? htmlspecialchars($_POST['first_name']) : ''; ?>"
                                            class="w-full pl-10 pr-4 py-2 sm:py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition duration-200"
-                                           placeholder="Enter fullname" required>
+                                           placeholder="Enter first name" required>
+                                </div>
+                            </div>
+                            
+                            <!-- Last Name -->
+                            <div class="order-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">
+                                    <i class="fas fa-user mr-1"></i> Last Name
+                                </label>
+                                <div class="relative">
+                                    <div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-500">
+                                        <i class="fas fa-user"></i>
+                                    </div>
+                                    <input type="text" name="last_name"
+                                           value="<?php echo isset($_POST['last_name']) ? htmlspecialchars($_POST['last_name']) : ''; ?>"
+                                           class="w-full pl-10 pr-4 py-2 sm:py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition duration-200"
+                                           placeholder="Enter last name" required>
                                 </div>
                             </div>
                             <!-- Email -->
-                            <div class="order-3">
+                            <div class="order-5">
                                 <label class="block text-sm font-medium text-gray-700 mb-2">
                                     <i class="fas fa-envelope mr-1"></i> Email Address
                                 </label>
@@ -346,7 +431,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 </div>
                             </div>
                             <!-- Password -->
-                            <div class="order-4">
+                            <div class="order-6">
                                 <label class="block text-sm font-medium text-gray-700 mb-2">
                                     <i class="fas fa-lock mr-1"></i> Password
                                 </label>
@@ -364,7 +449,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 <p class="text-xs text-gray-500 mt-1">Minimum 8 characters</p>
                             </div>
                             <!-- Confirm Password -->
-                            <div class="order-5">
+                            <div class="order-7">
                                 <label class="block text-sm font-medium text-gray-700 mb-2">
                                     <i class="fas fa-lock mr-1"></i> Confirm Password
                                 </label>
@@ -381,7 +466,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 </div>
                             </div>
                             <!-- Department Selection -->
-                            <div class="order-6 lg:col-span-2">
+                            <div class="order-8 lg:col-span-2">
                                 <label class="block text-sm font-medium text-gray-700 mb-2">
                                     <i class="fas fa-graduation-cap mr-1"></i> Department Assignment
                                 </label>

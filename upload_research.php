@@ -21,43 +21,55 @@ if (!isset($_SESSION['student_id'])) {
 // Role-based restriction removed: all students may upload anytime (no announcement requirement)
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $student_id = $_POST['student_id'];
+    // Trust the logged-in session for student identity
+    $student_id = $_SESSION['student_id'] ?? ($_POST['student_id'] ?? '');
     $title = trim($_POST['title']);
     $year = $_POST['year'];
     $abstract = trim($_POST['abstract']);
-    $members = trim($_POST['members']);
+    $author = trim($_POST['author']); // maps to books.authors
     $keywords = trim($_POST['keywords'] ?? '');
     // Department targeting (replaces legacy 'strand')
     $department = $_POST['department'] ?? ($_SESSION['department'] ?? '');
     // Course/Strand
     $course_strand = $_POST['course_strand'] ?? ($_SESSION['course_strand'] ?? '');
-    // Derive student_id and course_strand from the database for this student
-    $student_id = null;
+    // Derive course_strand from the database for this student if missing
     try {
-        $gstmt = $conn->prepare("SELECT student_id, course_strand FROM students WHERE student_id = ?");
-        $gstmt->execute([$student_id]);
-        $grow = $gstmt->fetch(PDO::FETCH_ASSOC);
-        if ($grow && isset($grow['student_id'])) {
-            $student_id = (string)$grow['student_id'];
+        if (!empty($student_id)) {
+            $gstmt = $conn->prepare("SELECT course_strand FROM students WHERE student_id = ? LIMIT 1");
+            $gstmt->execute([$student_id]);
+            $grow = $gstmt->fetch(PDO::FETCH_ASSOC);
+            if ($grow && isset($grow['course_strand']) && empty($course_strand)) {
+                $course_strand = (string)$grow['course_strand'];
+            }
         }
-        if ($grow && isset($grow['course_strand']) && empty($course_strand)) {
-            $course_strand = (string)$grow['course_strand'];
-        }
-        // group_number removed from upload flow
-    } catch (Exception $e) { /* ignore; allow null if not found */ }
+    } catch (Exception $e) { /* ignore */ }
     // Section removed from the model
     $status = 0; // Pending
 
     // Validate required fields
-    if (empty($title) || empty($abstract) || empty($members)) {
+    if (empty($student_id) || empty($title) || empty($abstract) || empty($author)) {
         $_SESSION['error'] = "All fields are required.";
         header("Location: student_dashboard.php");
         exit();
     }
 
+    // Check for duplicate title (case-insensitive, approved research only)
+    try {
+        $dup_check = $conn->prepare("SELECT book_id FROM books WHERE LOWER(TRIM(title)) = LOWER(TRIM(?)) AND status = 1 LIMIT 1");
+        $dup_check->execute([$title]);
+        if ($dup_check->fetch()) {
+            $_SESSION['error'] = "A research with this title already exists in the repository. Please use a different title.";
+            header("Location: student_dashboard.php");
+            exit();
+        }
+    } catch (PDOException $e) {
+        // If check fails, log but allow upload to proceed
+        error_log('Duplicate title check failed: ' . $e->getMessage());
+    }
+
     // --- Handle PDF Document Upload ---
     $document = '';
-    if (!empty($_FILES['document']['name'])) {
+    if (!empty($_FILES['document']['name'])) { // optional PDF
         $docName = $_FILES['document']['name'];
         $docTmp = $_FILES['document']['tmp_name'];
         $docSize = $_FILES['document']['size'];
@@ -121,11 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             header("Location: student_dashboard.php");
             exit();
         }
-    } else {
-        $_SESSION['error'] = "Research document (PDF) is required.";
-        header("Location: student_dashboard.php");
-        exit();
-    }
+    } // if no file provided, leave $document empty
 
     // --- Handle Image Upload (Optional) ---
     $image = '';
@@ -185,56 +193,26 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
     }
 
-    // Ensure schema has necessary columns
-    try {
-        $chk = $conn->prepare("SHOW COLUMNS FROM research_submission LIKE 'group_number'");
-        $chk->execute();
-        // Ensure department column exists (replace legacy 'strand')
-        $chkDept = $conn->prepare("SHOW COLUMNS FROM research_submission LIKE 'department'");
-        $chkDept->execute();
-        if ($chkDept->rowCount() == 0) {
-            $conn->exec("ALTER TABLE research_submission ADD COLUMN department VARCHAR(100) NULL AFTER members");
-        }
-        // Ensure student_id column exists for easier tracking
-        $chkStudNo = $conn->prepare("SHOW COLUMNS FROM research_submission LIKE 'student_id'");
-        $chkStudNo->execute();
-        if ($chkStudNo->rowCount() == 0) {
-            $conn->exec("ALTER TABLE research_submission ADD COLUMN student_id VARCHAR(50) NULL AFTER student_id");
-        }
-        // Ensure keywords column exists
-        $chkKw = $conn->prepare("SHOW COLUMNS FROM research_submission LIKE 'keywords'");
-        $chkKw->execute();
-        if ($chkKw->rowCount() == 0) {
-            $conn->exec("ALTER TABLE research_submission ADD COLUMN keywords VARCHAR(255) NULL AFTER abstract");
-        }
-        // Ensure course_strand column exists
-        $chkCs = $conn->prepare("SHOW COLUMNS FROM research_submission LIKE 'course_strand'");
-        $chkCs->execute();
-        if ($chkCs->rowCount() == 0) {
-            $conn->exec("ALTER TABLE research_submission ADD COLUMN course_strand VARCHAR(50) NULL AFTER department");
-        }
-        // If legacy 'strand' exists but 'department' is missing, above adds department; we won't write to strand anymore
-        // Ensure 'year' column can store Academic Year strings e.g., 'S.Y. 2025-2026'
-        $ctype = $conn->prepare("SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'research_submission' AND COLUMN_NAME = 'year'");
-        $ctype->execute();
-        $dt = strtolower((string)$ctype->fetchColumn());
-        if (in_array($dt, ['int','integer','tinyint','smallint','mediumint','bigint'])) {
-            $conn->exec("ALTER TABLE research_submission MODIFY COLUMN year VARCHAR(32) NOT NULL");
-        }
-    } catch (Exception $e) { /* ignore schema adjustments */ }
+    // No legacy schema mutations; using new books table
 
-    // --- Insert into Database ---
+    // Final duplicate check before insert
+    $final_dup = $conn->prepare("SELECT book_id FROM books WHERE LOWER(TRIM(title)) = LOWER(TRIM(?)) AND status = 1 LIMIT 1");
+    $final_dup->execute([$title]);
+    if ($final_dup->fetch()) {
+        $_SESSION['error'] = "A research with this title already exists. Please use a different title.";
+        header("Location: student_dashboard.php");
+        exit();
+    }
+
     try {
-        $stmt = $conn->prepare("INSERT INTO research_submission 
-            (student_id, student_id, title, year, abstract, keywords, members, department, course_strand, document, image, status, submission_date) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
-        $stmt->execute([$student_id, $student_id, $title, $year, $abstract, $keywords, $members, $department, $course_strand, $document, $image, $status]);
+        // Insert into books table
+        $stmt = $conn->prepare("INSERT INTO books (student_id, title, year, abstract, keywords, authors, department, course_strand, document, image, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->execute([$student_id, $title, $year, $abstract, $keywords, $author, $department, $course_strand, $document, $image, $status]);
 
         // Activity log
         try {
-            log_activity($conn, 'student', $_SESSION['student_id'] ?? null, 'upload_research', [
+            log_activity($conn, 'student', $student_id, 'upload_research', [
                 'title' => $title,
-                'student_id' => $student_id,
                 'department' => $department,
                 'course_strand' => $course_strand,
                 'year' => $year,

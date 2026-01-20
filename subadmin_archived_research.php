@@ -8,8 +8,51 @@ if (!isset($_SESSION['admin_id']) && !isset($_SESSION['subadmin_id'])) {
     exit();
 }
 
-$stmt = $conn->prepare("SELECT * FROM research_submission WHERE is_archived = 1");
-$stmt->execute();
+// Detect if research_submission.is_archived exists
+try {
+    $chk = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'research_submission' AND COLUMN_NAME = 'is_archived'");
+    $chk->execute();
+    $hasIsArchived = ((int)$chk->fetchColumn() > 0);
+} catch (Throwable $_) { $hasIsArchived = false; }
+
+// Optional: scope by subadmin department
+$deptFilterSql = '';
+$deptFilterVals = [];
+if (isset($_SESSION['subadmin_id'])) {
+    // Detect which role columns exist in employees
+    try {
+        $c1 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'role'");
+        $c1->execute();
+        $hasRoleCol = ((int)$c1->fetchColumn() > 0);
+    } catch (Throwable $_) { $hasRoleCol = false; }
+    try {
+        $c2 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'employee_type'");
+        $c2->execute();
+        $hasEmpTypeCol = ((int)$c2->fetchColumn() > 0);
+    } catch (Throwable $_) { $hasEmpTypeCol = false; }
+    $wanted = "('RESEARCH_ADVISER','FACULTY')";
+    if ($hasRoleCol || $hasEmpTypeCol) {
+        $roleWhere = $hasRoleCol && $hasEmpTypeCol
+            ? "(UPPER(REPLACE(TRIM(role),' ','_')) IN $wanted OR UPPER(REPLACE(TRIM(employee_type),' ','_')) IN $wanted)"
+            : ($hasRoleCol
+                ? "UPPER(REPLACE(TRIM(role),' ','_')) IN $wanted"
+                : "UPPER(REPLACE(TRIM(employee_type),' ','_')) IN $wanted");
+        try {
+            $qDept = $conn->prepare("SELECT department FROM employees WHERE employee_id = ? AND $roleWhere LIMIT 1");
+            $qDept->execute([$_SESSION['subadmin_id']]);
+            $dept = (string)($qDept->fetchColumn() ?: '');
+            if ($dept !== '') {
+                $deptFilterSql = " AND department LIKE ?";
+                $deptFilterVals[] = '%'.$dept.'%';
+            }
+        } catch (Throwable $_) { /* ignore filter if lookup fails */ }
+    }
+}
+
+$whereArchived = $hasIsArchived ? "(status = 2 OR COALESCE(is_archived,0) = 1)" : "status = 2";
+$sql = "SELECT * FROM research_submission WHERE $whereArchived" . $deptFilterSql;
+$stmt = $conn->prepare($sql);
+$stmt->execute($deptFilterVals);
 $archived = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // No need to map section/group; display department only

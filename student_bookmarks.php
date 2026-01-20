@@ -132,7 +132,7 @@ $result = $stmt->fetchAll();
                                     </h2>
                                     <p class="text-gray-700 mb-1 text-sm sm:text-base">
                                         <span class="font-semibold">Authors:</span>
-                                        <?php echo htmlspecialchars($row['members']); ?>
+                                        <?php echo htmlspecialchars($row['author'] ?? ''); ?>
                                     </p>
                                     <div class="flex flex-wrap items-center gap-2 mt-2 sm:mt-3">
                                         <span class="inline-flex items-center gap-2 text-[11px] sm:text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-2.5 py-1">

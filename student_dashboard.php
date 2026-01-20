@@ -44,7 +44,7 @@ $pendingCount = max(0, $submissionCount - $approvedCount);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Student Dashboard | SRC Research Repository</title>
+    <?php include __DIR__ . '/head_meta.php'; ?>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Font Awesome for icons -->
@@ -442,12 +442,12 @@ $pendingCount = max(0, $submissionCount - $approvedCount);
                             <p class="text-xs text-gray-500 mt-1">Add 3–8 keywords separated by commas to improve search visibility.</p>
                         </div>
 
-                        <!-- Row 4: Members -->
+                        <!-- Row 4: Author(s) -->
                         <div>
-                            <label class="block text-sm font-semibold text-gray-700 mb-1">Group Member Name(s) <span class="text-red-500">*</span></label>
+                            <label class="block text-sm font-semibold text-gray-700 mb-1">Author(s) <span class="text-red-500">*</span></label>
                             <div class="relative">
                                 <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fas fa-users"></i></span>
-                                <textarea name="members" rows="2" class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-primary focus:border-blue-primary transition-all placeholder-gray-400" placeholder="Enter member names separated by commas" required></textarea>
+                                <textarea name="author" rows="2" class="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-primary focus:border-blue-primary transition-all placeholder-gray-400" placeholder="Enter author names separated by commas" required></textarea>
                             </div>
                         </div>
 
@@ -477,8 +477,8 @@ $pendingCount = max(0, $submissionCount - $approvedCount);
                             </div>
                             
                             <div>
-                                <label class="block text-sm font-semibold text-gray-700 mb-1">Research Document (PDF) <span class="text-red-500">*</span></label>
-                                <input type="file" name="document" accept=".pdf" class="w-full px-3 py-2 border border-gray-300 rounded-lg file:mr-4 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-primary hover:file:bg-blue-100 transition-all duration-200" required>
+                                <label class="block text-sm font-semibold text-gray-700 mb-1">Research Document (PDF) <span class="text-gray-400">(Optional)</span></label>
+                                <input type="file" name="document" accept=".pdf" class="w-full px-3 py-2 border border-gray-300 rounded-lg file:mr-4 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-primary hover:file:bg-blue-100 transition-all duration-200">
                             </div>
                         </div>
 

@@ -1,0 +1,4 @@
+[24-Oct-2025 18:01:05 Europe/Berlin] DB connect error: SQLSTATE[HY000] [1045] Access denied for user 'srceduph_src_db'@'localhost' (using password: YES)
+[24-Nov-2025 08:05:29 Europe/Berlin] PHP Warning:  Undefined array key "firstname" in C:\xampppp\htdocs\src_orr\login.php on line 265
+[24-Nov-2025 08:56:44 Europe/Berlin] PHP Warning:  Undefined array key "firstname" in C:\xampppp\htdocs\src_orr\login.php on line 265
+[01-Dec-2025 08:19:30 Europe/Berlin] PHP Warning:  Undefined array key "firstname" in C:\xampppp\htdocs\src_orr\login.php on line 265

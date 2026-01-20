@@ -11,11 +11,34 @@ if (!isset($_SESSION['admin_id']) && !isset($_SESSION['subadmin_id'])) {
 
 // Check permissions for sub-admins
 $can_approve_research = true; // Admins can always approve
+
+// Detect which columns exist in employees for role filtering
+try {
+    $c1 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'role'");
+    $c1->execute();
+    $hasRoleColEmployees = ((int)$c1->fetchColumn() > 0);
+} catch (Throwable $_) { $hasRoleColEmployees = false; }
+try {
+    $c2 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'employee_type'");
+    $c2->execute();
+    $hasEmpTypeColEmployees = ((int)$c2->fetchColumn() > 0);
+} catch (Throwable $_) { $hasEmpTypeColEmployees = false; }
+// Build role WHERE clause only with existing columns
+$wantedRolesSql = "('RESEARCH_ADVISER','FACULTY')";
+$whereRoleEmployees = "1=0"; // default safe
+if ($hasRoleColEmployees && $hasEmpTypeColEmployees) {
+    $whereRoleEmployees = "( UPPER(REPLACE(TRIM(role), ' ', '_')) IN $wantedRolesSql OR UPPER(REPLACE(TRIM(employee_type), ' ', '_')) IN $wantedRolesSql )";
+} elseif ($hasRoleColEmployees) {
+    $whereRoleEmployees = "UPPER(REPLACE(TRIM(role), ' ', '_')) IN $wantedRolesSql";
+} elseif ($hasEmpTypeColEmployees) {
+    $whereRoleEmployees = "UPPER(REPLACE(TRIM(employee_type), ' ', '_')) IN $wantedRolesSql";
+}
 if (isset($_SESSION['subadmin_id'])) {
     // Need department to evaluate department-scoped permission key
     $assigned_department_tmp = '';
     try {
-        $tmpStmt = $conn->prepare("SELECT department FROM sub_admins WHERE id = ?");
+        $sqlDept1 = "SELECT department FROM employees WHERE employee_id = ? AND $whereRoleEmployees LIMIT 1";
+        $tmpStmt = $conn->prepare($sqlDept1);
         $tmpStmt->execute([$_SESSION['subadmin_id']]);
         $assigned_department_tmp = (string)($tmpStmt->fetchColumn() ?: '');
     } catch (Exception $e) { $assigned_department_tmp = ''; }
@@ -70,7 +93,8 @@ if (isset($_POST['archive'])) {
 // Get the subadmin's department if they are logged in
 $assigned_department = '';
 if (isset($_SESSION['subadmin_id'])) {
-    $department_stmt = $conn->prepare("SELECT department FROM sub_admins WHERE id = ?");
+    $sqlDept2 = "SELECT department FROM employees WHERE employee_id = ? AND $whereRoleEmployees LIMIT 1";
+    $department_stmt = $conn->prepare($sqlDept2);
     $department_stmt->execute([$_SESSION['subadmin_id']]);
     $assigned_department = $department_stmt->fetchColumn();
 }

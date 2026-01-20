@@ -11,6 +11,36 @@ if (!isset($_SESSION['admin_id'])) {
     exit();
 }
 
+// Detect availability of role / employee_type columns and build a safe expression
+try {
+    $qRole = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'role'");
+    $qRole->execute();
+    $hasRoleCol = ((int)$qRole->fetchColumn() > 0);
+} catch (Throwable $_) { $hasRoleCol = false; }
+try {
+    $qEmpType = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'employee_type'");
+    $qEmpType->execute();
+    $hasEmpTypeCol = ((int)$qEmpType->fetchColumn() > 0);
+} catch (Throwable $_) { $hasEmpTypeCol = false; }
+// Expression we can safely use in SQL without referencing a missing column
+$roleExpr = $hasRoleCol && $hasEmpTypeCol
+    ? "COALESCE(role, employee_type, '')"
+    : ($hasRoleCol
+        ? "COALESCE(role, '')"
+        : ($hasEmpTypeCol ? "COALESCE(employee_type, '')" : "''"));
+
+// Ensure admin display name is available using employees schema
+try {
+    if (empty($_SESSION['admin_name']) && !empty($_SESSION['admin_id'])) {
+        $stmt = $conn->prepare("SELECT CONCAT_WS(' ', COALESCE(first_name, firstname), NULLIF(COALESCE(middle_name, middlename), ''), COALESCE(last_name, lastname)) AS fullname FROM employees WHERE employee_id = ? LIMIT 1");
+        $stmt->execute([$_SESSION['admin_id']]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($row && !empty($row['fullname'])) {
+            $_SESSION['admin_name'] = $row['fullname'];
+        }
+    }
+} catch (Throwable $e) { /* non-fatal */ }
+
 // Initialize variables
 $total_students = $verified_students = $unverified_students = 0;
 $total_subadmins = 0;
@@ -28,10 +58,25 @@ try {
     $stmt->execute();
     $total_students = $stmt->fetch()['total'];
 
-    // Total Active Sub-admins
-    $stmt = $conn->prepare("SELECT COUNT(*) as total FROM sub_admins WHERE COALESCE(is_archived,0) = 0");
-    $stmt->execute();
-    $total_subadmins = $stmt->fetch()['total'];
+    // Total Research Advisers (sub-admins) - check if roles table exists
+    try {
+        $qRolesTable = $conn->prepare("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'roles'");
+        $qRolesTable->execute();
+        $hasRolesTable = ((int)$qRolesTable->fetchColumn() > 0);
+    } catch (Throwable $_) { $hasRolesTable = false; }
+    
+    if ($hasRolesTable) {
+        // Use new roles table - role_id = 2 is RESEARCH_ADVISER
+        $stmt = $conn->prepare("SELECT COUNT(*) as total FROM employees e INNER JOIN roles r ON e.employee_id = r.employee_id WHERE r.role_id = 2");
+        $stmt->execute();
+        $total_subadmins = $stmt->fetch()['total'];
+    } else {
+        // Fallback to old role/employee_type columns if roles table doesn't exist
+        $stmt = $conn->prepare("SELECT COUNT(*) as total FROM employees 
+            WHERE UPPER(REPLACE(TRIM({$roleExpr}),' ','_')) = 'RESEARCH_ADVISER'");
+        $stmt->execute();
+        $total_subadmins = $stmt->fetch()['total'];
+    }
 
     
     $stmt = $conn->prepare("SELECT COUNT(*) as verified FROM students WHERE is_verified = 1");
@@ -121,7 +166,7 @@ try {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Dashboard - Analytics</title>
+    <?php include __DIR__ . '/head_meta.php'; ?>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -286,7 +331,7 @@ try {
     tabindex="-1">
     <div class="flex items-center justify-between">
         <div>
-            <p class="text-sm font-medium text-gray-500 uppercase tracking-wide">Sub-admins</p>
+            <p class="text-sm font-medium text-gray-500 uppercase tracking-wide">Research Adviser</p>
             <p class="text-3xl font-bold text-indigo-600 mt-1"><?= number_format($total_subadmins) ?></p>
         </div>
         <div class="text-indigo-500 text-4xl">

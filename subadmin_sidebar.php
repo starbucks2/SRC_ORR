@@ -104,7 +104,38 @@ if ($is_admin) {
                 ?>
             </a>
         </li>
-        <li><a href="repository.php?department=<?= htmlspecialchars($_SESSION['department'] ?? '') ?>" class="<?= $base_link_cls . (___is_active($___current, 'repository.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-database mr-3"></i> Research Repository</a></li>
+        <?php
+            // Build a repository link that always locks to sub-admin's department
+            $repoDept = $_SESSION['department'] ?? '';
+            if ($repoDept === '' && $is_subadmin) {
+                try {
+                    // Derive department from employees table if available
+                    $hasRoleCol = $hasEmpTypeCol = false;
+                    try {
+                        $c1 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'role'");
+                        $c1->execute();
+                        $hasRoleCol = ((int)$c1->fetchColumn() > 0);
+                    } catch (Throwable $_) { $hasRoleCol = false; }
+                    try {
+                        $c2 = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'employee_type'");
+                        $c2->execute();
+                        $hasEmpTypeCol = ((int)$c2->fetchColumn() > 0);
+                    } catch (Throwable $_) { $hasEmpTypeCol = false; }
+                    $wanted = "('RESEARCH_ADVISER','FACULTY')";
+                    $roleWhere = $hasRoleCol && $hasEmpTypeCol
+                        ? "(UPPER(REPLACE(TRIM(role),' ','_')) IN $wanted OR UPPER(REPLACE(TRIM(employee_type),' ','_')) IN $wanted)"
+                        : ($hasRoleCol
+                            ? "UPPER(REPLACE(TRIM(role),' ','_')) IN $wanted"
+                            : ($hasEmpTypeCol ? "UPPER(REPLACE(TRIM(employee_type),' ','_')) IN $wanted" : '1=0'));
+                    $q = $conn->prepare("SELECT department FROM employees WHERE employee_id = ? AND $roleWhere LIMIT 1");
+                    $q->execute([$_SESSION['subadmin_id'] ?? '']);
+                    $repoDept = (string)($q->fetchColumn() ?: '');
+                    if ($repoDept !== '') { $_SESSION['department'] = $repoDept; }
+                } catch (Throwable $_) { /* leave empty */ }
+            }
+            $repoHref = 'repository.php' . ($repoDept !== '' ? ('?department=' . urlencode($repoDept)) : '');
+        ?>
+        <li><a href="<?= htmlspecialchars($repoHref) ?>" class="<?= $base_link_cls . (___is_active($___current, 'repository.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-database mr-3"></i> Research Repository</a></li>
     <?php if ($is_admin || $is_subadmin): ?>
         <li><a href="subadmin_view_students.php" class="<?= $base_link_cls . (___is_active($___current, 'subadmin_view_students.php') ? $active_cls : $hover_cls) ?>"><i class="fas fa-user-tag mr-3"></i> View Students</a></li>
     <?php endif; ?>

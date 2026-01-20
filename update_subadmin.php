@@ -11,15 +11,15 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 // Determine if an admin is performing the update
 $is_admin = isset($_SESSION['admin_id']);
 
-// Target sub-admin id: if admin provides a target_id, use it; otherwise use logged-in sub-admin
+// Target employee_id: if admin provides a target_id, use it; otherwise use logged-in sub-admin
 $target_id = null;
-if ($is_admin && !empty($_POST['target_id'])) {
-    $target_id = (int)$_POST['target_id'];
-} elseif (isset($_SESSION['subadmin_id'])) {
-    $target_id = (int)$_SESSION['subadmin_id'];
+if ($is_admin && isset($_POST['target_id']) && trim($_POST['target_id']) !== '') {
+    $target_id = trim($_POST['target_id']);
+} elseif (isset($_SESSION['subadmin_id']) && trim((string)$_SESSION['subadmin_id']) !== '') {
+    $target_id = trim((string)$_SESSION['subadmin_id']);
 }
 
-if (!$target_id) {
+if ($target_id === null || $target_id === '') {
     $_SESSION['error'] = "No sub-admin selected for update.";
     header('Location: ' . ($is_admin ? 'manage_subadmins.php' : 'subadmin_dashboard.php'));
     exit();
@@ -42,13 +42,28 @@ if ($fullname === '') {
 }
 
 try {
-    // Fetch target sub-admin record
-    $stmt = $conn->prepare("SELECT * FROM sub_admins WHERE id = ?");
+    // Detect available employees columns
+    $empCols = [];
+    try {
+        $qCols = $conn->prepare("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees'");
+        $qCols->execute();
+        $empCols = $qCols->fetchAll(PDO::FETCH_COLUMN, 0);
+    } catch (Throwable $_) { $empCols = []; }
+    $hasFirstCol = in_array('first_name', $empCols, true) || in_array('firstname', $empCols, true);
+    $hasLastCol  = in_array('last_name',  $empCols, true) || in_array('lastname',  $empCols, true);
+    $firstColName = in_array('first_name', $empCols, true) ? 'first_name' : (in_array('firstname', $empCols, true) ? 'firstname' : null);
+    $lastColName  = in_array('last_name',  $empCols, true) ? 'last_name'  : (in_array('lastname',  $empCols, true)  ? 'lastname'  : null);
+    $hasDeptCol   = in_array('department', $empCols, true);
+    $hasPermCol   = in_array('permissions', $empCols, true);
+    $hasPicCol    = in_array('profile_pic', $empCols, true);
+
+    // Fetch target employee record by employee_id (string)
+    $stmt = $conn->prepare("SELECT * FROM employees WHERE employee_id = ? LIMIT 1");
     $stmt->execute([$target_id]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$user) {
-        $_SESSION['error'] = 'Sub-admin account not found.';
+        $_SESSION['error'] = 'Research Adviser account not found.';
         header('Location: ' . ($is_admin ? 'manage_subadmins.php' : 'subadmin_dashboard.php'));
         exit();
     }
@@ -56,43 +71,8 @@ try {
     $changePassword = false;
     $new_hashed = null;
 
-    // Ensure required columns exist (best-effort on hosting where schema may vary)
-    // permissions column
-    try {
-        $chkPerm = $conn->prepare("SHOW COLUMNS FROM sub_admins LIKE 'permissions'");
-        $chkPerm->execute();
-        if ($chkPerm->rowCount() == 0) {
-            // Default to TEXT to store JSON
-            $conn->exec("ALTER TABLE sub_admins ADD COLUMN permissions TEXT NULL AFTER email");
-        }
-    } catch (Exception $e) { /* ignore */ }
-
-    // strand column
-    try {
-        $chkStrand = $conn->prepare("SHOW COLUMNS FROM sub_admins LIKE 'strand'");
-        $chkStrand->execute();
-        if ($chkStrand->rowCount() == 0) {
-            $conn->exec("ALTER TABLE sub_admins ADD COLUMN strand VARCHAR(50) NULL AFTER permissions");
-        }
-    } catch (Exception $e) { /* ignore */ }
-
-    // profile_pic column
-    $hasProfilePicCol = false;
-    try {
-        $chk = $conn->prepare("SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sub_admins' AND COLUMN_NAME = 'profile_pic'");
-        $chk->execute();
-        $hasProfilePicCol = (bool)$chk->fetchColumn();
-    } catch (Exception $e) {
-        $hasProfilePicCol = false;
-    }
-    if (!$hasProfilePicCol) {
-        try {
-            $conn->exec("ALTER TABLE sub_admins ADD COLUMN profile_pic VARCHAR(255) NULL AFTER strand");
-            $hasProfilePicCol = true;
-        } catch (Exception $e) {
-            $hasProfilePicCol = false;
-        }
-    }
+    // Use employees profile_pic column availability
+    $hasProfilePicCol = $hasPicCol;
 
     // Prepare current pic
     $oldProfilePic = $user['profile_pic'] ?? null;
@@ -151,10 +131,28 @@ try {
 
     if ($is_admin) {
         // Admin editing another sub-admin: allow updating email, permissions, and password without current password
-        $email = trim($_POST['email'] ?? $user['email']);
-        $permissions = isset($_POST['permissions']) ? $_POST['permissions'] : null; // may be null => leave unchanged
-        // Determine strand: if provided in POST, use it; otherwise keep existing
-        $strand = isset($_POST['strand']) ? trim($_POST['strand']) : ($user['strand'] ?? null);
+        $email = trim($_POST['email'] ?? ($user['email'] ?? ''));
+        // permissions from UI (if any) or leave unchanged
+        $permissions = isset($_POST['permissions']) ? $_POST['permissions'] : null;
+        // Determine department: if provided in POST, use it; otherwise keep existing
+        $strand = isset($_POST['strand']) ? trim($_POST['strand']) : ($user['department'] ?? null);
+        // Role change: only Dean or Research Adviser
+        $role_name_raw = isset($_POST['role_name']) ? $_POST['role_name'] : ($user['role'] ?? ($user['employee_type'] ?? 'RESEARCH_ADVISER'));
+        $role_key = strtoupper(str_replace(' ', '_', trim((string)$role_name_raw)));
+        if ($role_key !== 'DEAN' && $role_key !== 'RESEARCH_ADVISER') { $role_key = 'RESEARCH_ADVISER'; }
+        // Resolve role_id if column exists
+        $role_id_val = null;
+        try {
+            $hasRoleIdCol = false;
+            $qRID = $conn->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees' AND COLUMN_NAME = 'role_id'");
+            $qRID->execute();
+            $hasRoleIdCol = ((int)$qRID->fetchColumn() > 0);
+            if ($hasRoleIdCol) {
+                $qr = $conn->prepare("SELECT role_id FROM roles WHERE role_name = ? AND is_active = 1 LIMIT 1");
+                $qr->execute([$role_key]);
+                $role_id_val = $qr->fetchColumn();
+            }
+        } catch (Throwable $_) { /* ignore */ }
 
         // Basic email validation
         if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -163,8 +161,8 @@ try {
             exit();
         }
 
-        // Email uniqueness check
-        $check = $conn->prepare("SELECT id FROM sub_admins WHERE email = ? AND id != ? LIMIT 1");
+        // Email uniqueness check on employees
+        $check = $conn->prepare("SELECT employee_id FROM employees WHERE email = ? AND employee_id <> ? LIMIT 1");
         $check->execute([$email, $target_id]);
         if ($check->rowCount() > 0) {
             $_SESSION['error'] = 'Email already in use by another account.';
@@ -193,29 +191,62 @@ try {
             $new_hashed = password_hash($new_password, PASSWORD_DEFAULT);
         }
 
-        // Build update query (include strand and profile_pic if column exists)
-        $params = [$fullname, $email, $permissions !== null ? json_encode($permissions) : $user['permissions']];
-        $sql = "UPDATE sub_admins SET fullname = ?, email = ?, permissions = ?";
+        // Split fullname into first/last if columns exist
+        $firstVal = $fullname; $lastVal = '';
+        if ($hasFirstCol || $hasLastCol) {
+            $parts = preg_split('/\s+/', trim($fullname));
+            if (count($parts) > 1) {
+                $lastVal = array_pop($parts);
+                $firstVal = trim(implode(' ', $parts));
+            } else { $firstVal = $fullname; $lastVal = ''; }
+        }
+
+        // Build update query (employees)
+        $sets = [];
+        $params = [];
+        if ($firstColName) { $sets[] = "$firstColName = ?"; $params[] = $firstVal; }
+        if ($lastColName)  { $sets[] = "$lastColName = ?";  $params[] = $lastVal; }
+        $sets[] = "email = ?"; $params[] = $email;
+        if ($hasPermCol) { $sets[] = "permissions = ?"; $params[] = ($permissions !== null ? json_encode($permissions) : ($user['permissions'] ?? null)); }
         if ($changePassword) {
-            $sql .= ", password = ?";
-            $params[] = $new_hashed;
+            $sets[] = "password = ?"; $params[] = $new_hashed;
         }
-        if ($strand !== null) {
-            $sql .= ", strand = ?";
-            $params[] = $strand;
+        if ($strand !== null && $hasDeptCol) {
+            $sets[] = "department = ?"; $params[] = $strand;
         }
+        // Update textual role columns
+        // Detect columns again: prefer employee_type for enum systems else role
+        try {
+            $hasRoleCol = in_array('role', $empCols, true);
+            $hasEmpTypeCol = in_array('employee_type', $empCols, true);
+        } catch (Throwable $_) { $hasRoleCol = false; $hasEmpTypeCol = false; }
+        if ($hasEmpTypeCol) { $sets[] = "employee_type = ?"; $params[] = $role_key; }
+        if ($hasRoleCol) {
+            $roleUi = ($role_key === 'DEAN') ? 'Dean' : 'Research Adviser';
+            $sets[] = "role = ?"; $params[] = $roleUi;
+        }
+        if ($role_id_val !== null) { $sets[] = "role_id = ?"; $params[] = $role_id_val; }
         if ($hasProfilePicCol) {
             if ($newProfilePicName === false) {
-                $sql .= ", profile_pic = NULL";
+                $sets[] = "profile_pic = NULL";
             } elseif (is_string($newProfilePicName)) {
-                $sql .= ", profile_pic = ?";
-                $params[] = $newProfilePicName;
+                $sets[] = "profile_pic = ?"; $params[] = $newProfilePicName;
             }
         }
-        $sql .= " WHERE id = ?";
+        $sql = "UPDATE employees SET " . implode(', ', $sets) . " WHERE employee_id = ?";
         $params[] = $target_id;
         $stmt = $conn->prepare($sql);
         $ok = $stmt->execute($params);
+
+        // Also upsert mapping into roles table if we resolved a role_id
+        if ($ok && $role_id_val !== null) {
+            try {
+                $rname = ($role_key === 'DEAN') ? 'DEAN' : 'RESEARCH_ADVISER';
+                $dname = ($role_key === 'DEAN') ? 'Dean' : 'Research Adviser';
+                $up = $conn->prepare("INSERT INTO roles (employee_id, role_id, role_name, display_name, is_active) VALUES (?, ?, ?, ?, 1) ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), role_name = VALUES(role_name), display_name = VALUES(display_name), is_active = VALUES(is_active)");
+                $up->execute([$target_id, $role_id_val, $rname, $dname]);
+            } catch (Throwable $_) { /* ignore mapping failure */ }
+        }
 
         if ($ok) {
             // Remove old file if replaced or removed
@@ -223,11 +254,7 @@ try {
                 $oldPath = __DIR__ . '/images/' . $oldProfilePic;
                 if (is_file($oldPath)) { @unlink($oldPath); }
             }
-            if ($changePassword) {
-                $_SESSION['success'] = 'Password changed successfully.';
-            } else {
-                $_SESSION['success'] = 'Sub-admin updated successfully.';
-            }
+            $_SESSION['success'] = $changePassword ? 'Password changed successfully.' : 'Research Adviser updated successfully.';
             header('Location: manage_subadmins.php');
             exit();
         } else {
@@ -275,22 +302,28 @@ try {
             $new_hashed = password_hash($new_password, PASSWORD_DEFAULT);
         }
 
-        // Perform update for self (allow profile_pic change and keep strand unchanged here)
-        $params = [$fullname];
-        $sql = "UPDATE sub_admins SET fullname = ?";
+        // Perform update for self (allow profile_pic change) on employees
+        // Split fullname
+        $firstVal = $fullname; $lastVal = '';
+        if ($hasFirstCol || $hasLastCol) {
+            $parts = preg_split('/\s+/', trim($fullname));
+            if (count($parts) > 1) { $lastVal = array_pop($parts); $firstVal = trim(implode(' ', $parts)); }
+        }
+        $sets = [];
+        $params = [];
+        if ($firstColName) { $sets[] = "$firstColName = ?"; $params[] = $firstVal; }
+        if ($lastColName)  { $sets[] = "$lastColName = ?";  $params[] = $lastVal; }
         if ($changePassword) {
-            $sql .= ", password = ?";
-            $params[] = $new_hashed;
+            $sets[] = "password = ?"; $params[] = $new_hashed;
         }
         if ($hasProfilePicCol) {
             if ($newProfilePicName === false) {
-                $sql .= ", profile_pic = NULL";
+                $sets[] = "profile_pic = NULL";
             } elseif (is_string($newProfilePicName)) {
-                $sql .= ", profile_pic = ?";
-                $params[] = $newProfilePicName;
+                $sets[] = "profile_pic = ?"; $params[] = $newProfilePicName;
             }
         }
-        $sql .= " WHERE id = ?";
+        $sql = "UPDATE employees SET " . implode(', ', $sets) . " WHERE employee_id = ?";
         $params[] = $target_id;
         $stmt = $conn->prepare($sql);
         $ok = $stmt->execute($params);
@@ -301,12 +334,9 @@ try {
                 $oldPath = __DIR__ . '/images/' . $oldProfilePic;
                 if (is_file($oldPath)) { @unlink($oldPath); }
             }
-            // Refresh session fullname from DB if this is the logged-in sub-admin
-            if (isset($_SESSION['subadmin_id']) && $_SESSION['subadmin_id'] == $target_id) {
-                $stmt = $conn->prepare("SELECT fullname FROM sub_admins WHERE id = ?");
-                $stmt->execute([$target_id]);
-                $updated = $stmt->fetch(PDO::FETCH_ASSOC);
-                $_SESSION['fullname'] = $updated['fullname'] ?? $fullname;
+            // Refresh session display name
+            if (isset($_SESSION['subadmin_id']) && (string)$_SESSION['subadmin_id'] === (string)$target_id) {
+                $_SESSION['subadmin_name'] = $fullname;
             }
             if ($changePassword) {
                 $_SESSION['success'] = 'Password changed successfully.';

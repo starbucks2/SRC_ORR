@@ -2,26 +2,40 @@
 session_start();
 include 'db.php';
 
-// Accept paper_id as GET parameter
-if (!isset($_GET['paper_id']) || !is_numeric($_GET['paper_id'])) {
+// Accept either book_id or legacy paper_id as GET parameter
+$book_id = null;
+if (isset($_GET['book_id']) && is_numeric($_GET['book_id'])) {
+    $book_id = (int)$_GET['book_id'];
+} elseif (isset($_GET['paper_id']) && is_numeric($_GET['paper_id'])) {
+    $book_id = (int)$_GET['paper_id'];
+}
+
+if (!$book_id || $book_id <= 0) {
     $_SESSION['error'] = "Invalid document ID. Please select a valid research paper.";
     header("Location: repository.php");
     exit();
 }
-$paper_id = (int)$_GET['paper_id'];
 
-// Increment the view count
-$stmt = $conn->prepare("UPDATE research_submission SET views = views + 1 WHERE id = ?");
-$stmt->execute([$paper_id]);
+// Try direct from books (preferred)
+$research = null;
+try {
+    $stmt = $conn->prepare("UPDATE books SET views = views + 1 WHERE book_id = ?");
+    $stmt->execute([$book_id]);
 
-// Fetch document and metadata
-$stmt = $conn->prepare("SELECT title, members, year, strand, document FROM research_submission WHERE id = ?");
-$stmt->execute([$paper_id]);
-$research = $stmt->fetch(PDO::FETCH_ASSOC);
+    $stmt = $conn->prepare("SELECT title, authors AS author, year, department, document FROM books WHERE book_id = ?");
+    $stmt->execute([$book_id]);
+    $research = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+    // Fallback to legacy view if direct books access fails
+    $stmt = $conn->prepare("UPDATE research_submission SET views = views + 1 WHERE id = ?");
+    $stmt->execute([$book_id]);
 
-if (!$research || empty($research['document'])) {
-    $error = "Document not found.";
-} else {
+    $stmt = $conn->prepare("SELECT title, author, year, department, document FROM research_submission WHERE id = ?");
+    $stmt->execute([$book_id]);
+    $research = $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+if ($research && !empty($research['document'])) {
     $filename = $research['document'];
     // Normalize to a relative web path like uploads/research_documents/<file>
     $clean = ltrim($filename, '/\\');
@@ -64,17 +78,17 @@ if (!$research || empty($research['document'])) {
                     <?= isset($research['title']) ? htmlspecialchars($research['title']) : 'Untitled Document' ?>
                 </h1>
                 <div class="mt-1 text-slate-600 text-sm md:text-base">
-                    <?php if (!empty($research['members'])): ?>
-                        <span class="font-semibold">Group Members:</span>
-                        <span><?= htmlspecialchars($research['members']) ?></span>
+                    <?php if (!empty($research['author'])): ?>
+                        <span class="font-semibold">Author(s):</span>
+                        <span><?= htmlspecialchars($research['author']) ?></span>
                     <?php endif; ?>
                     <?php if (!empty($research['year'])): ?>
                         <span class="mx-2">•</span>
                         <span><?= htmlspecialchars($research['year']) ?></span>
                     <?php endif; ?>
-                    <?php if (!empty($research['strand'])): ?>
+                    <?php if (!empty($research['department'])): ?>
                         <span class="mx-2">•</span>
-                        <span>Course: <?= htmlspecialchars($research['strand']) ?></span>
+                        <span>Department: <?= htmlspecialchars($research['department']) ?></span>
                     <?php endif; ?>
                 </div>
             </div>

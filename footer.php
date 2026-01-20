@@ -10,7 +10,7 @@
                     </div>
                     <p class="text-gray-300 mb-4">Empowering students through quality education and innovative research opportunities.</p>
                     <div class="flex space-x-4">
-                        <a href="https://www.facebook.com/SRCssite" target="_blank" rel="noopener noreferrer" class="text-gray-300 hover:text-white transition-colors duration-200" aria-label="Becuran NHS on Facebook">
+                        <a href="https://www.facebook.com/santaritacollege" target="_blank" rel="noopener noreferrer" class="text-gray-300 hover:text-white transition-colors duration-200" aria-label="Becuran NHS on Facebook">
                             <i class="fab fa-facebook-f"></i>
                         </a>
                         
