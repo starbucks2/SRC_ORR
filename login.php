@@ -19,6 +19,8 @@ ini_set('error_log', __DIR__ . '/php_error.log');
 function rr_redirect($target) {
     $logf = __DIR__ . '/auth_redirect.log';
     @file_put_contents($logf, date('c') . " redirect to: " . $target . "\n", FILE_APPEND);
+    // Ensure session data is saved before redirecting
+    if (session_status() === PHP_SESSION_ACTIVE) { @session_write_close(); }
     // Clean any buffered output before sending headers
     while (ob_get_level() > 0) { @ob_end_clean(); }
     if (!headers_sent()) {
