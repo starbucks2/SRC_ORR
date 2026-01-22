@@ -1,6 +1,20 @@
 <?php
 include __DIR__ . '/include/session_init.php';
 
+// Fallback: ensure rr_redirect exists even if global helper wasn't loaded
+if (!function_exists('rr_redirect')) {
+    function rr_redirect($target) {
+        if (session_status() === PHP_SESSION_ACTIVE) { @session_write_close(); }
+        while (ob_get_level() > 0) { @ob_end_clean(); }
+        if (!headers_sent()) {
+            header('Location: ' . $target);
+            exit();
+        }
+        echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=' . htmlspecialchars($target, ENT_QUOTES) . '"><script>location.replace(' . json_encode($target) . ');</script></head><body>Redirecting...</body></html>';
+        exit();
+    }
+}
+
 // Compute absolute base URL for this app (supports subdirectories like /SRC_ORR/)
 function base_url(): string {
     $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
