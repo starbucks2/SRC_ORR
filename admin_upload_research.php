@@ -1,8 +1,6 @@
 <?php
-// Start session
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+// Centralized secure session initialization (PHP 8.1+ safe)
+include __DIR__ . '/include/session_init.php';
 
 // Allow admin or sub-admin with permission
 $is_admin = isset($_SESSION['admin_id']);
@@ -28,22 +26,34 @@ if (!$can_upload) {
 $message = '';
 $message_type = ''; // 'success' or 'error'
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     include 'db.php';
 
-    $title = trim($_POST['title']);
-    $year = $_POST['year'];
-    $abstract = trim($_POST['abstract']);
-    $author = trim($_POST['author']);
+    // Safely read inputs to avoid undefined index notices on PHP 8.1+
+    $title = isset($_POST['title']) ? trim((string)$_POST['title']) : '';
+    $year = isset($_POST['year']) ? trim((string)$_POST['year']) : '';
+    $abstract = isset($_POST['abstract']) ? trim((string)$_POST['abstract']) : '';
+    $author = isset($_POST['author']) ? trim((string)$_POST['author']) : '';
     // Use department field (replaces legacy 'strand')
-    $department = trim($_POST['department'] ?? '');
-    $course_strand = trim($_POST['course_strand'] ?? '');
-    $keywords = trim($_POST['keywords'] ?? '');
+    $department = isset($_POST['department']) ? trim((string)$_POST['department']) : '';
+    $course_strand = isset($_POST['course_strand']) ? trim((string)$_POST['course_strand']) : '';
+    $keywords = isset($_POST['keywords']) ? trim((string)$_POST['keywords']) : '';
     $status = 1; // Approved
 
-    // Validate required fields
-    if (empty($title) || empty($abstract) || empty($author) || empty($department)) {
-        $message = "All fields are required.";
+    // Default department to session department for sub-admins if not provided
+    if ($department === '' && isset($_SESSION['subadmin_id']) && !empty($_SESSION['department'])) {
+        $department = (string)$_SESSION['department'];
+    }
+
+    // Validate required fields with better feedback
+    $missing = [];
+    if ($title === '') { $missing[] = 'Title'; }
+    if ($year === '') { $missing[] = 'Academic/School Year'; }
+    if ($abstract === '') { $missing[] = 'Abstract'; }
+    if ($author === '') { $missing[] = 'Author(s)'; }
+    if ($department === '') { $missing[] = 'Department'; }
+    if (!empty($missing)) {
+        $message = 'Please fill the following: ' . implode(', ', $missing) . '.';
         $message_type = 'error';
     } else {
         $image = '';
@@ -297,7 +307,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-500">
                                 <i class="fas fa-calendar"></i>
                             </div>
-                            <select name="year" id="year_select" class="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            <select name="year" id="year_select" required class="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                                 <option value="">Loading years...</option>
                             </select>
                         </div>
@@ -406,6 +416,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             const csLabel = document.getElementById('course_label');
             const yearSel = document.getElementById('year_select');
             const preselectedYear = <?= json_encode($_POST['year'] ?? '') ?>;
+            const preselectedDept = <?= json_encode($_POST['department'] ?? '') ?>;
+            const preselectedCourse = <?= json_encode($_POST['course_strand'] ?? '') ?>;
 
             let cachedYearSpans = [];
 
@@ -435,6 +447,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if (preselectedYear && preselectedYear === full) opt.selected = true;
                     yearSel.appendChild(opt);
                 });
+                // If nothing preselected, default to the first available year
+                if (!preselectedYear && yearSel.options.length > 1) {
+                    yearSel.options[1].selected = true;
+                }
             }
 
             async function loadAcademicYears(){
@@ -465,9 +481,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         opt.value = d.name;
                         opt.textContent = d.name;
                         opt.dataset.deptId = d.id;
-                        if (keep && d.name === keep) opt.selected = true;
+                        if ((keep && d.name === keep) || (preselectedDept && d.name === preselectedDept)) opt.selected = true;
                         deptSel.appendChild(opt);
                     });
+                    // Ensure value is set if coming from server POST
+                    if (preselectedDept) { deptSel.value = preselectedDept; }
                 } catch(e) { console.error(e); }
             }
 
@@ -483,6 +501,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         opt.textContent = s.strand;
                         csSel.appendChild(opt);
                     });
+                    if (preselectedCourse) { csSel.value = preselectedCourse; }
                 } catch(e) { console.error(e); }
             }
 
@@ -498,6 +517,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         opt.textContent = c.name + (c.code ? ` (${c.code})` : '');
                         csSel.appendChild(opt);
                     });
+                    if (preselectedCourse) { csSel.value = preselectedCourse; }
                 } catch(e) { console.error(e); }
             }
 

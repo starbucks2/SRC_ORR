@@ -1,5 +1,5 @@
 <?php
-session_start();
+include __DIR__ . '/include/session_init.php';
 include 'db.php';
 
 $error = '';

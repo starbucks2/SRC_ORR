@@ -1,7 +1,5 @@
 <?php
-session_start();
-// Start output buffering to prevent premature output breaking redirects
-if (!ob_get_level()) { ob_start(); }
+include __DIR__ . '/include/session_init.php';
 
 // Compute absolute base URL for this app (supports subdirectories like /SRC_ORR/)
 function base_url(): string {
@@ -48,9 +46,10 @@ if (file_exists(__DIR__ . '/.env')) {
 
 include 'db.php'; // Database connection
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $email = trim($_POST['email']);
-    $password = $_POST['password'];
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
+    // Safely retrieve POSTed credentials to avoid undefined index notices on PHP 8.1+
+    $email = isset($_POST['email']) ? trim((string)$_POST['email']) : '';
+    $password = isset($_POST['password']) ? (string)$_POST['password'] : '';
 
     // --- LOGIN ATTEMPT LIMITING ---
     if (!isset($_SESSION['login_attempts'])) {

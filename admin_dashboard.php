@@ -1,5 +1,5 @@
 <?php
-session_start();
+include __DIR__ . '/include/session_init.php';
 include 'db.php';
 // Use Philippine Standard Time for all date()/time() on this page
 date_default_timezone_set('Asia/Manila');
