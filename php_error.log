@@ -1,0 +1,23 @@
+[24-Oct-2025 18:01:05 Europe/Berlin] DB connect error: SQLSTATE[HY000] [1045] Access denied for user 'srceduph_src_db'@'localhost' (using password: YES)
+[24-Nov-2025 08:05:29 Europe/Berlin] PHP Warning:  Undefined array key "firstname" in C:\xampppp\htdocs\src_orr\login.php on line 265
+[24-Nov-2025 08:56:44 Europe/Berlin] PHP Warning:  Undefined array key "firstname" in C:\xampppp\htdocs\src_orr\login.php on line 265
+[01-Dec-2025 08:19:30 Europe/Berlin] PHP Warning:  Undefined array key "firstname" in C:\xampppp\htdocs\src_orr\login.php on line 265
+[26-Jan-2026 07:55:05 Europe/Berlin] PHP Fatal error:  Uncaught Error: Call to undefined function rr_redirect() in C:\xampppp\htdocs\src_orr\login.php:318
+Stack trace:
+#0 {main}
+  thrown in C:\xampppp\htdocs\src_orr\login.php on line 318
+[27-Jan-2026 01:42:13 Europe/Berlin] PHP Fatal error:  Uncaught Error: Call to undefined function rr_redirect() in C:\xampppp\htdocs\src_orr\login.php:361
+Stack trace:
+#0 {main}
+  thrown in C:\xampppp\htdocs\src_orr\login.php on line 361
+[27-Jan-2026 01:42:21 Europe/Berlin] PHP Fatal error:  Uncaught Error: Call to undefined function rr_redirect() in C:\xampppp\htdocs\src_orr\login.php:361
+Stack trace:
+#0 {main}
+  thrown in C:\xampppp\htdocs\src_orr\login.php on line 361
+[27-Jan-2026 01:42:34 Europe/Berlin] PHP Fatal error:  Uncaught Error: Call to undefined function rr_redirect() in C:\xampppp\htdocs\src_orr\login.php:361
+Stack trace:
+#0 {main}
+  thrown in C:\xampppp\htdocs\src_orr\login.php on line 361
+[27-Jan-2026 03:06:03 Europe/Berlin] PHP Warning:  Undefined array key "firstname" in C:\xampppp\htdocs\src_orr\login.php on line 300
+[27-Jan-2026 03:35:04 Europe/Berlin] PHP Warning:  Undefined array key "firstname" in C:\xampppp\htdocs\src_orr\login.php on line 300
+[27-Jan-2026 04:03:40 Europe/Berlin] PHP Warning:  Undefined array key "firstname" in C:\xampppp\htdocs\src_orr\login.php on line 300
